@@ -180,7 +180,7 @@ const ONE_FINGER_DIR = 1, ONE_FINGER_PX_PER_ZOOM = 90, DOUBLE_TAP_MS = 300, DOUB
     if (e.touches.length !== 1) { z = null; return; }   // 2本指は Leaflet のピンチに任せる
     const t = e.touches[0], now = Date.now();
     if (now - last.t < DOUBLE_TAP_MS && Math.hypot(t.clientX - last.x, t.clientY - last.y) < DOUBLE_TAP_PX) {
-      z = { y: t.clientY, zoom: map.getZoom(), moved: false, at: map.mouseEventToContainerPoint(t) };
+      z = { y: t.clientY, zoom: map.getZoom(), moved: false, at: map.mouseEventToContainerPoint(t), snap: map.options.zoomSnap };
       last.t = 0;
       e.preventDefault(); e.stopPropagation();   // 2回目のタップは Leaflet のドラッグ・クリックに渡さない
     } else {
@@ -192,14 +192,22 @@ const ONE_FINGER_DIR = 1, ONE_FINGER_PX_PER_ZOOM = 90, DOUBLE_TAP_MS = 300, DOUB
     e.preventDefault(); e.stopPropagation();
     const dy = (e.touches[0].clientY - z.y) * ONE_FINGER_DIR;
     if (!z.moved && Math.abs(dy) < DRAG_START_PX) return;
-    z.moved = true;
+    // 指の下の地点を動かさないため、操作中は zoomSnap を切る
+    // (setZoomAround は丸め前のズームで中心を計算するので、0.5 刻みに丸められると指の位置からずれて地図が上下に揺れる)
+    if (!z.moved) { z.moved = true; map.options.zoomSnap = 0; }
     map.setZoomAround(z.at, Math.max(map.getMinZoom(), Math.min(map.getMaxZoom(), z.zoom + dy / ONE_FINGER_PX_PER_ZOOM)), { animate: false });
   }, opt);
   const end = (e) => {
     if (!z) return;
     const s = z; z = null;
     e.preventDefault(); e.stopPropagation();
-    if (!s.moved && e.type === 'touchend') map.setZoomAround(s.at, Math.min(map.getMaxZoom(), map.getZoom() + 1));   // 動かさなければ通常のダブルタップ拡大
+    if (s.moved) {
+      map.options.zoomSnap = s.snap;   // 離したら元の刻みに揃える (揃えた値で中心を計算し直すので位置はずれない)
+      const snapped = s.snap ? Math.round(map.getZoom() / s.snap) * s.snap : map.getZoom();
+      if (snapped !== map.getZoom()) map.setZoomAround(s.at, snapped);
+    } else if (e.type === 'touchend') {
+      map.setZoomAround(s.at, Math.min(map.getMaxZoom(), map.getZoom() + 1));   // 動かさなければ通常のダブルタップ拡大
+    }
   };
   el.addEventListener('touchend', end, opt);
   el.addEventListener('touchcancel', end, opt);
