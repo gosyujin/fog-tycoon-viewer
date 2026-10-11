@@ -169,6 +169,42 @@ async function load() {
   }
 }
 
+// ---------- 1本指ズーム: ダブルタップの2回目で指を離さず上下にドラッグ (他の地図アプリと同じ操作) ----------
+// ONE_FINGER_DIR: 1 = 下にドラッグで拡大 / -1 = 上にドラッグで拡大
+const ONE_FINGER_DIR = 1, ONE_FINGER_PX_PER_ZOOM = 90, DOUBLE_TAP_MS = 300, DOUBLE_TAP_PX = 30, DRAG_START_PX = 6;
+(() => {
+  const el = map.getContainer();
+  let last = { t: 0, x: 0, y: 0 }, z = null;
+  const opt = { capture: true, passive: false };
+  el.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) { z = null; return; }   // 2本指は Leaflet のピンチに任せる
+    const t = e.touches[0], now = Date.now();
+    if (now - last.t < DOUBLE_TAP_MS && Math.hypot(t.clientX - last.x, t.clientY - last.y) < DOUBLE_TAP_PX) {
+      z = { y: t.clientY, zoom: map.getZoom(), moved: false, at: map.mouseEventToContainerPoint(t) };
+      last.t = 0;
+      e.preventDefault(); e.stopPropagation();   // 2回目のタップは Leaflet のドラッグ・クリックに渡さない
+    } else {
+      last = { t: now, x: t.clientX, y: t.clientY };
+    }
+  }, opt);
+  el.addEventListener('touchmove', (e) => {
+    if (!z) return;
+    e.preventDefault(); e.stopPropagation();
+    const dy = (e.touches[0].clientY - z.y) * ONE_FINGER_DIR;
+    if (!z.moved && Math.abs(dy) < DRAG_START_PX) return;
+    z.moved = true;
+    map.setZoomAround(z.at, Math.max(map.getMinZoom(), Math.min(map.getMaxZoom(), z.zoom + dy / ONE_FINGER_PX_PER_ZOOM)), { animate: false });
+  }, opt);
+  const end = (e) => {
+    if (!z) return;
+    const s = z; z = null;
+    e.preventDefault(); e.stopPropagation();
+    if (!s.moved && e.type === 'touchend') map.setZoomAround(s.at, Math.min(map.getMaxZoom(), map.getZoom() + 1));   // 動かさなければ通常のダブルタップ拡大
+  };
+  el.addEventListener('touchend', end, opt);
+  el.addEventListener('touchcancel', end, opt);
+})();
+
 // ---------- 設定の保存・復元 (この端末の localStorage) ----------
 const SETTING_IDS = ['fog', 'tracks', 'radius', 'density', 'range'];
 function saveSettings() {
