@@ -195,7 +195,12 @@ map.on('locationfound', (e) => {
   L.circle(e.latlng, { radius: e.accuracy, color: '#2563eb', weight: 1, fillOpacity: 0.12, interactive: false }).addTo(me);
   L.circleMarker(e.latlng, { radius: 7, color: '#fff', weight: 2, fillColor: '#2563eb', fillOpacity: 1, interactive: false }).addTo(me);
 });
-map.on('locationerror', (e) => { setPanel(true); $('stats').textContent = '現在地を取得できません: ' + e.message; });
+map.on('locationerror', (e) => {
+  setPanel(true);
+  const why = { 1: '位置情報が許可されていません。ブラウザ(iOS は Safari の ぁあ → Webサイトの設定 → 位置情報)と、端末の位置情報サービスを許可してください',
+    2: '位置を特定できません。電波の良い場所でもう一度試してください', 3: '位置の取得がタイムアウトしました。もう一度試してください' };
+  $('stats').textContent = '現在地を取得できません: ' + (why[e.code] || e.message);
+});
 
 // ---------- 起動 ----------
 (async () => {
