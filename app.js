@@ -243,16 +243,20 @@ $('logout').onclick = () => {
 
 // 現在地 (Geolocation は HTTPS が必要。GitHub Pages なら可)
 const me = L.layerGroup().addTo(map);
+let quietLocate = false;   // 起動時の自動取得は失敗してもパネルを開かない
 $('locate').onclick = () => {
   if (!navigator.geolocation) { $('stats').textContent = 'この端末では現在地を取得できません'; return; }
+  quietLocate = false;
   map.locate({ setView: true, maxZoom: 17, enableHighAccuracy: true, timeout: 15000 });
 };
 map.on('locationfound', (e) => {
+  fitted = true;   // 現在地に合わせたので、データ読み込み時の全体表示で上書きしない
   me.clearLayers();
   L.circle(e.latlng, { radius: e.accuracy, color: '#2563eb', weight: 1, fillOpacity: 0.12, interactive: false }).addTo(me);
   L.circleMarker(e.latlng, { radius: 7, color: '#fff', weight: 2, fillColor: '#2563eb', fillOpacity: 1, interactive: false }).addTo(me);
 });
 map.on('locationerror', async (e) => {
+  if (quietLocate) { quietLocate = false; return; }
   setPanel(true);
   const why = { 1: '位置情報が許可されていません。ブラウザ(iOS は Safari の ぁあ → Webサイトの設定 → 位置情報)と、端末の位置情報サービスを許可してください',
     2: '位置を特定できません。電波の良い場所でもう一度試してください', 3: '位置の取得がタイムアウトしました。もう一度試してください' };
@@ -261,6 +265,45 @@ map.on('locationerror', async (e) => {
   try { st = ` [ブラウザの状態: ${(await navigator.permissions.query({ name: 'geolocation' })).state}]`; } catch {}
   $('stats').textContent = '現在地を取得できません: ' + (why[e.code] || e.message) + st;
 });
+
+// ---------- 表示位置の保存 / 起動時の初期位置 ----------
+// 起動 (新しいセッション) は現在地へ。同じセッションでの再表示 (タブの再読み込み・復帰) は最後に見ていた位置を維持。
+// iOS がバックグラウンドのページを破棄して再読み込みした場合も sessionStorage は残る。
+const SS = {
+  get(k) { try { return sessionStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { sessionStorage.setItem(k, v); } catch {} },
+};
+map.on('moveend', () => {
+  const c = map.getCenter();
+  LS.set('fog_view', JSON.stringify({ lat: c.lat, lng: c.lng, zoom: map.getZoom() }));
+});
+function initialView() {
+  let v = null;
+  if (SS.get('fog_started')) { try { v = JSON.parse(LS.get('fog_view')); } catch {} }
+  SS.set('fog_started', '1');
+  if (v && isFinite(v.lat) && isFinite(v.lng) && isFinite(v.zoom)) { map.setView([v.lat, v.lng], v.zoom); fitted = true; return; }
+  if (!navigator.geolocation) return;
+  quietLocate = true;   // 失敗したらデータ全体表示のまま
+  map.locate({ setView: true, maxZoom: 17, enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
+}
+
+// ---------- ビルド表示・更新確認 (gyazo-tycoon-viewer と同じ方式) ----------
+// build-info.js は GitHub Actions のデプロイ時に sha/時刻で上書きされる。ローカルは 'dev'。
+$('bt').textContent = window.BUILD_INFO ? `build ${BUILD_INFO.sha} (${BUILD_INFO.time})` : '';
+// ホーム画面に追加した iOS の Web アプリは HTML を強くキャッシュするので、起動時に build-info.js を no-store で取り直し、
+// デプロイ済みの sha が今のページと違えば ?v=<sha> 付き URL へ移動して読み直す
+(async () => {
+  const cur = window.BUILD_INFO && BUILD_INFO.sha;
+  if (!cur || cur === 'dev' || /[?&](code|error)=/.test(location.search)) return;   // 認可の戻り(code は1回しか使えない)では動かさない
+  try {
+    const t = await (await fetch('build-info.js?nc=' + Date.now(), { cache: 'no-store' })).text();
+    const m = t.match(/sha:\s*'([0-9a-f]+)'/);
+    if (!m || m[1] === cur) return;
+    if (SS.get('fog_upd') === m[1]) return;   // 同じ版へ移動済み(デプロイ反映待ちなど)なら繰り返さない
+    SS.set('fog_upd', m[1]);
+    const u = new URL(location.href); u.searchParams.set('v', m[1]); location.replace(u);
+  } catch {}
+})();
 
 // ---------- 起動 ----------
 (async () => {
@@ -281,5 +324,6 @@ map.on('locationerror', async (e) => {
   if ($('tracks').checked) tracksLayer.addTo(map);
   $('ui').hidden = false;
   $('locate').hidden = false;
+  initialView();
   load();
 })();

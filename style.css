@@ -9,9 +9,16 @@ body { font: 14px/1.4 system-ui, sans-serif; }
 #ui, #ui *, #locate, #login, #login *, .leaflet-control, .leaflet-control * { touch-action: manipulation; }
 .fab, #panel button { -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none; }
 #locate {
-  position: absolute; z-index: 1000; right: 10px;
+  position: absolute; z-index: 1000; left: 50%; transform: translateX(-50%);   /* 画面中央 */
   bottom: calc(34px + env(safe-area-inset-bottom));   /* Leaflet の帰属表示と重ならない高さ */
 }
+/* 画面左下のビルド表示 (gyazo-tycoon-viewer の #statbar と同じ役割)。右下は Leaflet の帰属表示 */
+#statbar {
+  position: absolute; left: 8px; bottom: calc(6px + env(safe-area-inset-bottom)); z-index: 1000;
+  max-width: calc(100vw - 16px); padding: 2px 8px; border-radius: 4px; pointer-events: none;
+  background: rgba(20, 24, 33, .85); color: #aab; font-size: 11px; line-height: 1.5;
+}
+#statbar:empty { display: none; }
 .fab {
   width: 40px; height: 40px; border: 0; border-radius: 50%; cursor: pointer; padding: 0;
   background: rgba(20, 24, 33, .85); color: #eee; font-size: 22px; line-height: 40px;
