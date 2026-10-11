@@ -95,7 +95,7 @@ const Fog = L.Layer.extend({
     c.style.width = size.x + 'px'; c.style.height = size.y + 'px';
     const g = c.getContext('2d');
     g.scale(dpr, dpr);
-    g.fillStyle = 'rgba(8, 10, 16, 0.88)';
+    g.fillStyle = `rgba(8, 10, 16, ${+$('density').value / 100})`;
     g.fillRect(0, 0, size.x, size.y);
     g.globalCompositeOperation = 'destination-out';
     const mpp = 40075016.686 * Math.cos(m.getCenter().lat * Math.PI / 180) / (256 * 2 ** m.getZoom());
@@ -169,14 +169,35 @@ async function load() {
   }
 }
 
+// ---------- 設定の保存・復元 (この端末の localStorage) ----------
+const SETTING_IDS = ['fog', 'tracks', 'radius', 'density', 'range'];
+function saveSettings() {
+  const v = {};
+  for (const id of SETTING_IDS) v[id] = $(id).type === 'checkbox' ? $(id).checked : $(id).value;
+  LS.set('fog_settings', JSON.stringify(v));
+}
+function restoreSettings() {
+  let v = {};
+  try { v = JSON.parse(LS.get('fog_settings') || '{}') || {}; } catch {}
+  for (const id of SETTING_IDS) {
+    if (!(id in v)) continue;
+    const el = $(id);
+    if (el.type === 'checkbox') el.checked = !!v[id];
+    else if (el.tagName !== 'SELECT' || [...el.options].some((o) => o.value === v[id])) el.value = v[id];
+  }
+  $('rv').textContent = $('radius').value;
+  $('dv').textContent = $('density').value;
+}
+
 // ---------- UI ----------
 const setPanel = (open) => { $('panel').hidden = !open; $('gear').setAttribute('aria-expanded', open); };
 $('gear').onclick = () => setPanel($('panel').hidden);
 map.on('click', () => setPanel(false));
-$('fog').onchange = (e) => (e.target.checked ? fog.addTo(map) : map.removeLayer(fog));
-$('tracks').onchange = (e) => (e.target.checked ? tracksLayer.addTo(map) : map.removeLayer(tracksLayer));
-$('radius').oninput = (e) => { $('rv').textContent = e.target.value; if ($('fog').checked) fog.redraw(); };
-$('range').onchange = applyRange;
+$('fog').onchange = (e) => { saveSettings(); e.target.checked ? fog.addTo(map) : map.removeLayer(fog); };
+$('tracks').onchange = (e) => { saveSettings(); e.target.checked ? tracksLayer.addTo(map) : map.removeLayer(tracksLayer); };
+$('radius').oninput = (e) => { $('rv').textContent = e.target.value; saveSettings(); if ($('fog').checked) fog.redraw(); };
+$('density').oninput = (e) => { $('dv').textContent = e.target.value; saveSettings(); if ($('fog').checked) fog.redraw(); };
+$('range').onchange = () => { saveSettings(); applyRange(); };
 $('reload').onclick = load;
 $('logout').onclick = () => {
   if (!confirm('この端末の Dropbox 認可と控えを削除しますか?')) return;
@@ -220,6 +241,9 @@ map.on('locationerror', async (e) => {
     };
     return;
   }
+  restoreSettings();
+  if ($('tracks').checked) tracksLayer.addTo(map);
   $('ui').hidden = false;
+  $('locate').hidden = false;
   load();
 })();

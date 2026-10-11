@@ -13,12 +13,12 @@
 
 <div id="ui" hidden>
   <button id="gear" class="fab" type="button" aria-label="設定" aria-expanded="false" aria-controls="panel">⚙</button>
-  <button id="locate" class="fab" type="button" aria-label="現在地">◎</button>
   <div id="panel" hidden>
     <strong>Fog Tycoon</strong>
     <div id="stats">読み込み中…</div>
     <label><input type="checkbox" id="fog" checked> 霧</label>
     <label><input type="checkbox" id="tracks"> 軌跡</label>
+    <label>霧の濃さ <input type="range" id="density" min="30" max="100" step="5" value="88"> <span id="dv">88</span>%</label>
     <label>晴れ半径 <input type="range" id="radius" min="20" max="300" value="80"> <span id="rv">80</span>m</label>
     <label>期間
       <select id="range">
@@ -32,6 +32,8 @@
     <button id="logout" type="button">Dropbox の認可を解除</button>
   </div>
 </div>
+
+<button id="locate" class="fab" type="button" aria-label="現在地" hidden>◎</button>
 
 <div id="login" hidden>
   <div class="card">
