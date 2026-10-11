@@ -8,7 +8,7 @@ fog-tycoon の外出先用ビューア(静的ページ)。GitHub Pages に置く
 ## セットアップ
 
 1. Dropbox App Console で App Folder 型のアプリを作り、Permissions で `files.content.read` と `files.content.write` を有効にする。
-2. Redirect URIs に Pages の URL(`https://gosyujin.github.io/fog-tycoon-viewer/`)を登録する。
+2. Redirect URIs に Pages の URL(`https://note.gosyujin.com/fog-tycoon-viewer/`)を登録する。
 3. この repo を GitHub に push し、Settings → Pages で `main` / root を公開する。
 4. スマホで Pages を開き、App key を入力して認可する。
 
