@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Fog Tycoon</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="map"></div>
+
+<div id="ui" hidden>
+  <button id="gear" class="fab" type="button" aria-label="設定" aria-expanded="false" aria-controls="panel">⚙</button>
+  <button id="locate" class="fab" type="button" aria-label="現在地">◎</button>
+  <div id="panel" hidden>
+    <strong>Fog Tycoon</strong>
+    <div id="stats">読み込み中…</div>
+    <label><input type="checkbox" id="fog" checked> 霧</label>
+    <label><input type="checkbox" id="tracks"> 軌跡</label>
+    <label>晴れ半径 <input type="range" id="radius" min="20" max="300" value="80"> <span id="rv">80</span>m</label>
+    <label>期間
+      <select id="range">
+        <option value="all">全期間</option>
+        <option value="365">直近1年</option>
+        <option value="30">直近30日</option>
+        <option value="7">直近7日</option>
+      </select>
+    </label>
+    <button id="reload" type="button">再読み込み</button>
+    <button id="logout" type="button">Dropbox の認可を解除</button>
+  </div>
+</div>
+
+<div id="login" hidden>
+  <div class="card">
+    <strong>Fog Tycoon</strong>
+    <p>Dropbox アプリの App key を入力して認可します。この端末の localStorage にだけ保存し、読み取り権限のみ要求します。</p>
+    <p>このページの URL <code id="redir"></code> を、Dropbox アプリの Redirect URIs に登録してください。</p>
+    <input id="key" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="App key">
+    <button id="loginBtn" type="button">Dropbox で認可する</button>
+    <p id="loginErr" class="err"></p>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,217 @@
+// fog-tycoon の外出先ビューア。コード・鍵・データは含まない。
+// Dropbox(App Folder) の /points.json を、端末で認可(PKCE・files.content.read のみ)して読む。
+// points.json: { generated, points: [[epochSec, lat, lon], ...] } (時刻昇順)
+const SCOPE = 'files.content.read';
+const DATA_PATH = '/points.json';
+const REDIR = location.origin + location.pathname;
+const GAP_SEC = 30 * 60;   // この時間以上空いたら軌跡を分割
+const GAP_M = 2000;        // この距離以上飛んだら軌跡を分割
+
+const $ = (id) => document.getElementById(id);
+const LS = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} },
+};
+
+// ---------- Dropbox 認可 (PKCE) ----------
+const b64u = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const rand = (n) => b64u(crypto.getRandomValues(new Uint8Array(n)));
+
+async function startLogin(key) {
+  const ver = rand(32), state = rand(16);
+  const ch = b64u(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(ver)));
+  LS.set('fog_key', key); LS.set('fog_ver', ver); LS.set('fog_state', state);
+  location.href = 'https://www.dropbox.com/oauth2/authorize?' + new URLSearchParams({
+    client_id: key, response_type: 'code', code_challenge: ch, code_challenge_method: 'S256',
+    token_access_type: 'offline', scope: SCOPE, redirect_uri: REDIR, state,
+  });
+}
+
+async function tokenReq(params) {
+  const r = await fetch('https://api.dropboxapi.com/oauth2/token', { method: 'POST', body: new URLSearchParams(params) });
+  if (!r.ok) throw new Error('token ' + r.status);
+  return r.json();
+}
+
+let access = null, expires = 0;
+async function token() {
+  if (access && Date.now() < expires - 60000) return access;
+  const j = await tokenReq({ grant_type: 'refresh_token', refresh_token: LS.get('fog_refresh'), client_id: LS.get('fog_key') });
+  access = j.access_token; expires = Date.now() + j.expires_in * 1000;
+  return access;
+}
+
+// 認可から戻ってきたとき (?code= / ?error=) の処理
+async function finishLogin() {
+  const q = new URLSearchParams(location.search);
+  if (!q.has('code') && !q.has('error')) return;
+  history.replaceState(null, '', REDIR);
+  if (q.has('error')) throw new Error('認可エラー: ' + (q.get('error_description') || q.get('error')));
+  if (q.get('state') !== LS.get('fog_state')) throw new Error('state が一致しません。もう一度認可してください');
+  const j = await tokenReq({
+    grant_type: 'authorization_code', code: q.get('code'), code_verifier: LS.get('fog_ver'),
+    client_id: LS.get('fog_key'), redirect_uri: REDIR,
+  });
+  LS.set('fog_refresh', j.refresh_token); LS.set('fog_ver', null); LS.set('fog_state', null);
+}
+
+async function fetchPoints() {
+  const r = await fetch('https://content.dropboxapi.com/2/files/download', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + await token(), 'Dropbox-API-Arg': JSON.stringify({ path: DATA_PATH }) },
+  });
+  if (!r.ok) throw new Error('download ' + r.status + ' ' + (await r.text()).slice(0, 120));
+  const text = await r.text();
+  LS.set('fog_cache', text);   // 通信できないとき用の控え (入らなければ無視)
+  return JSON.parse(text);
+}
+
+// ---------- 地図 ----------
+const map = L.map('map', { zoomSnap: 0.5, preferCanvas: true });
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap contributors', maxZoom: 19,
+}).addTo(map);
+
+let all = [], points = [];
+const tracksLayer = L.layerGroup();   // 軌跡は既定でオフ
+
+// 霧: 画面全体を覆い、各点の周りを destination-out でくり抜く
+const Fog = L.Layer.extend({
+  onAdd(m) {
+    this._map = m;
+    this._c = L.DomUtil.create('canvas', 'leaflet-zoom-hide fog-canvas');
+    m.getPanes().overlayPane.appendChild(this._c);
+    m.on('move zoom resize viewreset', this.redraw, this);
+    this.redraw();
+  },
+  onRemove(m) {
+    m.off('move zoom resize viewreset', this.redraw, this);
+    this._c.remove();
+  },
+  redraw() {
+    const m = this._map, size = m.getSize(), dpr = window.devicePixelRatio || 1, c = this._c;
+    L.DomUtil.setPosition(c, m.containerPointToLayerPoint([0, 0]));
+    c.width = size.x * dpr; c.height = size.y * dpr;
+    c.style.width = size.x + 'px'; c.style.height = size.y + 'px';
+    const g = c.getContext('2d');
+    g.scale(dpr, dpr);
+    g.fillStyle = 'rgba(8, 10, 16, 0.88)';
+    g.fillRect(0, 0, size.x, size.y);
+    g.globalCompositeOperation = 'destination-out';
+    const mpp = 40075016.686 * Math.cos(m.getCenter().lat * Math.PI / 180) / (256 * 2 ** m.getZoom());
+    const r = Math.max(3, +$('radius').value / mpp);
+    const b = m.getBounds().pad(r * mpp / 111000 + 0.01);
+    const step = Math.max(1, r / 3), seen = new Set();   // 近接点は同じピクセルセルに丸めて描画を減らす
+    for (const [, lat, lon] of points) {
+      if (!b.contains([lat, lon])) continue;
+      const p = m.latLngToContainerPoint([lat, lon]);
+      const key = Math.round(p.x / step) + ',' + Math.round(p.y / step);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const grad = g.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+      grad.addColorStop(0, 'rgba(0,0,0,1)');
+      grad.addColorStop(0.6, 'rgba(0,0,0,1)');
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = grad;
+      g.beginPath(); g.arc(p.x, p.y, r, 0, Math.PI * 2); g.fill();
+    }
+  },
+});
+const fog = new Fog();
+
+function drawTracks() {
+  tracksLayer.clearLayers();
+  let seg = [], prev = null;
+  const flush = () => {
+    if (seg.length > 1) L.polyline(seg, { color: '#4fc3f7', weight: 2, opacity: 0.7, interactive: false }).addTo(tracksLayer);
+    seg = [];
+  };
+  for (const [ts, lat, lon] of points) {
+    if (prev && (ts - prev[0] > GAP_SEC || map.distance([prev[1], prev[2]], [lat, lon]) > GAP_M)) flush();
+    seg.push([lat, lon]); prev = [ts, lat, lon];
+  }
+  flush();
+}
+
+let note = '', fitted = false;
+function applyRange() {
+  const v = $('range').value;
+  const since = v === 'all' ? 0 : Date.now() / 1000 - Number(v) * 86400;
+  points = all.filter((p) => p[0] >= since);
+  const km = points.reduce((s, p, i) => (i && p[0] - points[i - 1][0] <= GAP_SEC ? s + map.distance([points[i - 1][1], points[i - 1][2]], [p[1], p[2]]) : s), 0) / 1000;
+  $('stats').textContent = `${points.length.toLocaleString()} 点 / 約 ${km.toFixed(1)} km${note}`;
+  drawTracks();
+  if ($('fog').checked) fog.redraw();
+}
+
+function showData(d, offline) {
+  all = d.points || [];
+  const when = d.generated ? new Date(d.generated).toLocaleString('ja-JP') : '';
+  note = (when ? ` · 更新 ${when}` : '') + (offline ? ' · オフライン(控え)' : '');
+  if (!all.length) { $('stats').textContent = '点がありません'; return; }
+  let s = 90, w = 180, n = -90, e = -180;   // spread だと大量点でスタックが溢れるのでループで求める
+  for (const [, lat, lon] of all) { if (lat < s) s = lat; if (lat > n) n = lat; if (lon < w) w = lon; if (lon > e) e = lon; }
+  if (!fitted) { map.fitBounds([[s, w], [n, e]]); fitted = true; }   // 再読み込みで表示位置を飛ばさない
+  if (!map.hasLayer(fog) && $('fog').checked) fog.addTo(map);
+  applyRange();
+}
+
+async function load() {
+  $('stats').textContent = '読み込み中…';
+  try {
+    showData(await fetchPoints(), false);
+  } catch (err) {
+    const cached = LS.get('fog_cache');
+    if (cached && !/ 40[019]\b/.test(err.message)) {   // 認可切れ(400/401/409)は控えに逃げない
+      try { showData(JSON.parse(cached), true); return; } catch {}
+    }
+    $('stats').textContent = '読み込めません: ' + err.message;
+  }
+}
+
+// ---------- UI ----------
+const setPanel = (open) => { $('panel').hidden = !open; $('gear').setAttribute('aria-expanded', open); };
+$('gear').onclick = () => setPanel($('panel').hidden);
+map.on('click', () => setPanel(false));
+$('fog').onchange = (e) => (e.target.checked ? fog.addTo(map) : map.removeLayer(fog));
+$('tracks').onchange = (e) => (e.target.checked ? tracksLayer.addTo(map) : map.removeLayer(tracksLayer));
+$('radius').oninput = (e) => { $('rv').textContent = e.target.value; if ($('fog').checked) fog.redraw(); };
+$('range').onchange = applyRange;
+$('reload').onclick = load;
+$('logout').onclick = () => {
+  if (!confirm('この端末の Dropbox 認可と控えを削除しますか?')) return;
+  for (const k of ['fog_key', 'fog_refresh', 'fog_ver', 'fog_state', 'fog_cache']) LS.set(k, null);
+  location.reload();
+};
+
+// 現在地 (Geolocation は HTTPS が必要。GitHub Pages なら可)
+const me = L.layerGroup().addTo(map);
+$('locate').onclick = () => {
+  if (!navigator.geolocation) { $('stats').textContent = 'この端末では現在地を取得できません'; return; }
+  map.locate({ setView: true, maxZoom: 17, enableHighAccuracy: true, timeout: 15000 });
+};
+map.on('locationfound', (e) => {
+  me.clearLayers();
+  L.circle(e.latlng, { radius: e.accuracy, color: '#2563eb', weight: 1, fillOpacity: 0.12, interactive: false }).addTo(me);
+  L.circleMarker(e.latlng, { radius: 7, color: '#fff', weight: 2, fillColor: '#2563eb', fillOpacity: 1, interactive: false }).addTo(me);
+});
+map.on('locationerror', (e) => { setPanel(true); $('stats').textContent = '現在地を取得できません: ' + e.message; });
+
+// ---------- 起動 ----------
+(async () => {
+  map.setView([35.68, 139.76], 11);
+  try { await finishLogin(); } catch (err) { $('loginErr').textContent = err.message; }
+  if (!LS.get('fog_refresh')) {
+    $('redir').textContent = REDIR;
+    $('key').value = LS.get('fog_key') || '';
+    $('login').hidden = false;
+    $('loginBtn').onclick = () => {
+      const k = $('key').value.trim();
+      if (!k) { $('loginErr').textContent = 'App key を入力してください'; return; }
+      startLogin(k).catch((e) => ($('loginErr').textContent = e.message));
+    };
+    return;
+  }
+  $('ui').hidden = false;
+  load();
+})();
