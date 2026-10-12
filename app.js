@@ -82,10 +82,20 @@ const mask = document.createElement('canvas'), mctx = mask.getContext('2d', { wi
 
 // ヒートマップの色: 訪問日数ごとの基準色 [この日数以上, 色]。凡例 (#legend) と揃える。間の輝度は色を補間してなめらかにつなぐ
 const HEAT_STEPS = [[1, [59, 130, 246]], [2, [34, 197, 94]], [4, [250, 204, 21]], [10, [239, 68, 68]]];
-const HEAT_SCALE = Math.min(window.devicePixelRatio || 1, 1.5);   // マスクの解像度 (CSS px 比)。上げるほど縁がきれいだが再描画が重い
 const HEAT_ALPHA = 0.6, HEAT_FEATHER = [0.03, 0.6];   // 色が付く縁は 1日の輝度の 3%→60% で透明→不透明に立ち上げてぼかす
 // 各セルの輝度の落ち方 [半径比, 中心比]。ガウス分布のように中心から外へゆるやかに減らす (縁を硬い円にしない)
 const HEAT_PROFILE = [[0, 1], [0.15, 0.97], [0.3, 0.85], [0.5, 0.55], [0.7, 0.25], [0.85, 0.08], [1, 0]];
+const heatAt = (t) => {   // 山の高さ: 中心からの距離 (半径比 t) → 0..1。HEAT_PROFILE を線形補間
+  if (t >= 1) return 0;
+  for (let i = 1; i < HEAT_PROFILE.length; i++) {
+    const [t1, k1] = HEAT_PROFILE[i], [t0, k0] = HEAT_PROFILE[i - 1];
+    if (t <= t1) return k0 + (k1 - k0) * (t - t0) / (t1 - t0);
+  }
+  return 0;
+};
+const HEAT_KN = 64, HEAT_KERNEL = new Float32Array(HEAT_KN + 1);   // 距離の2乗 (半径比) で引く表
+for (let i = 0; i <= HEAT_KN; i++) HEAT_KERNEL[i] = heatAt(Math.sqrt(i / HEAT_KN));
+let heatBuf = new Float32Array(0);
 const heatT = (n) => Math.min(1, Math.log(1 + n) / Math.log(1 + HEAT_STEPS[HEAT_STEPS.length - 1][0]));   // 日数 → 0..1
 const heatV = (n) => Math.round(255 * heatT(n));
 // 輝度 0..255 → RGBA (little-endian の Uint32 に詰めて、ピクセルごとの変換を1回の参照で済ませる)
@@ -179,37 +189,42 @@ const Fog = L.Layer.extend({
       g.beginPath(); g.arc(p.x, p.y, r, 0, Math.PI * 2); g.fill();
     }
   },
-  // ヒートマップ: セルごとの訪問日数を、最大値合成(lighten)したマスクの輝度に落とし、色に変換して重ねる。
-  // マスクは各セルの中心が最大・縁に向かって下がるので、赤い芯の周りに黄・緑・青の輪が出る。霧は出さない (未探索地域もそのまま見せる)。
+  // ヒートマップ: 低解像度の格子に、各セルの訪問日数を重みにした山 (HEAT_PROFILE) を足し合わせて密度を作り、色に変換して重ねる。
+  // セルごとの最大値ではなく足し合わせなので、日数の違うセルが隣り合っても色がなめらかにつながる。
+  // 1日だけ通った道の中心が「1日」になるよう、道に沿ってセルが並んだときの合計 (HEAT_LINE_SUM) で割る。霧は出さない。
   // リアルタイム追跡の点は「今日1日分」として扱う
   _heat(g, m, size, r, b) {
     const w = Math.ceil(size.x), h = Math.ceil(size.y);
     if (!w || !h) return;
-    const sc = HEAT_SCALE, mw = Math.ceil(w * sc), mh = Math.ceil(h * sc);   // 縁はぼかしてあるので、マスクは低解像度でよい (拡大時に補間される)
-    if (mask.width !== mw || mask.height !== mh) { mask.width = mw; mask.height = mh; }   // 毎回作り直さない (確保が重い)
-    mctx.setTransform(sc, 0, 0, sc, 0, 0);
-    mctx.fillStyle = '#000';
-    mctx.fillRect(0, 0, w, h);
-    mctx.globalCompositeOperation = 'lighten';
-    const spot = (lat, lon, n) => {
+    const step = Math.max(1, r / 8), rg = r / step;   // 格子の1マス (CSS px)。山の半径は常に約8マス (荒いので拡大時に補間して滑らかにする)
+    const gw = Math.ceil(w / step) + 2, gh = Math.ceil(h / step) + 2;
+    if (heatBuf.length < gw * gh) heatBuf = new Float32Array(gw * gh);
+    const F = heatBuf; F.fill(0, 0, gw * gh);
+    const add = (lat, lon, n) => {
       if (!b.contains([lat, lon])) return;
-      const p = m.latLngToContainerPoint([lat, lon]);
-      const v = heatV(n);
-      const grad = mctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
-      for (const [t, k] of HEAT_PROFILE) { const x = Math.round(v * k); grad.addColorStop(t, `rgb(${x},${x},${x})`); }
-      mctx.fillStyle = grad;
-      mctx.beginPath(); mctx.arc(p.x, p.y, r, 0, Math.PI * 2); mctx.fill();
+      const p = m.latLngToContainerPoint([lat, lon]), cx = p.x / step, cy = p.y / step;
+      const x0 = Math.max(0, Math.ceil(cx - rg)), x1 = Math.min(gw - 1, Math.floor(cx + rg));
+      const y0 = Math.max(0, Math.ceil(cy - rg)), y1 = Math.min(gh - 1, Math.floor(cy + rg));
+      for (let y = y0; y <= y1; y++) {
+        const dy = (y - cy) / rg, row = y * gw;
+        for (let x = x0; x <= x1; x++) {
+          const dx = (x - cx) / rg, d2 = dx * dx + dy * dy;
+          if (d2 < 1) F[row + x] += n * HEAT_KERNEL[(d2 * HEAT_KN) | 0];
+        }
+      }
     };
-    for (const [lat, lon, n] of cells) spot(lat, lon, n);
-    for (const [, lat, lon] of live) spot(lat, lon, 1);
-    mctx.globalCompositeOperation = 'source-over';
-    mctx.setTransform(1, 0, 0, 1, 0, 0);
-    const img = mctx.getImageData(0, 0, mask.width, mask.height), d8 = img.data, d32 = new Uint32Array(d8.buffer);
-    for (let i = 0; i < d32.length; i++) d32[i] = HEAT_RGBA[d8[i * 4]];
+    for (const [lat, lon, n] of cells) add(lat, lon, n);
+    for (const [, lat, lon] of live) add(lat, lon, 1);
+    // セルが道に沿って CELL_M おきに並んだときの、中心での合計 (= 1日分の道の中心の値)
+    let line = 0;
+    for (let k = -50; k <= 50; k++) line += heatAt(Math.abs(k) * CELL_M / +$('radius').value);
+    if (mask.width !== gw || mask.height !== gh) { mask.width = gw; mask.height = gh; }
+    const img = mctx.createImageData(gw, gh), d32 = new Uint32Array(img.data.buffer);
+    for (let i = 0, n = gw * gh; i < n; i++) d32[i] = HEAT_RGBA[Math.round(255 * heatT(F[i] / line))];
     mctx.putImageData(img, 0, 0);
     g.globalCompositeOperation = 'source-over';
     g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
-    g.drawImage(mask, 0, 0, w, h);
+    g.drawImage(mask, 0, 0, gw * step, gh * step);
   },
 });
 const fog = new Fog();
