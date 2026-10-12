@@ -67,11 +67,21 @@ async function fetchPoints() {
 }
 
 // ---------- 地図 ----------
-const map = L.map('map', { zoomSnap: 0.5, preferCanvas: true });
+const map = L.map('map', { zoomSnap: 0.5, preferCanvas: true, fadeAnimation: false });   // fadeAnimation: タイルをフェードインさせず、読めた瞬間に出す
+// 動かしている間も、表示領域の外側 EDGE_TILES 枚ぶんまで先に読む (Leaflet の既定は、モバイルでは動かし終わってから表示領域だけを読むので、
+// 隣の地区に動かすと一度空白になる。保存済み (sw.js) なら、端に入る前にもう描かれている)。
+const EDGE_TILES = 1;
+const BufferedTileLayer = L.TileLayer.extend({
+  _getTiledPixelBounds(center) {
+    const b = L.TileLayer.prototype._getTiledPixelBounds.call(this, center), pad = EDGE_TILES * this.getTileSize().x;
+    return L.bounds(b.min.subtract([pad, pad]), b.max.add([pad, pad]));
+  },
+});
 // crossOrigin: Service Worker (sw.js) がタイルを CORS の応答として保存するため。keepBuffer: 動かした後に戻っても再読み込みしない。
-// updateWhenZooming: ピンチ中は読み込まず、止まってから読む (途中のズームの無駄な読み込みを避ける)
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution: '© OpenStreetMap contributors', maxZoom: 19, crossOrigin: true, keepBuffer: 4, updateWhenZooming: false,
+// updateWhenIdle: false + updateInterval: 動かしている最中も読み込む。updateWhenZooming: ピンチ中は読み込まず、止まってから読む (途中のズームの無駄な読み込みを避ける)
+new BufferedTileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap contributors', maxZoom: 19, crossOrigin: true, keepBuffer: 4,
+  updateWhenIdle: false, updateInterval: 50, updateWhenZooming: false,
 }).addTo(map);
 
 let all = [], points = [];
