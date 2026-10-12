@@ -73,6 +73,7 @@ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
 }).addTo(map);
 
 let all = [], points = [];
+const live = [];   // リアルタイム追跡で取った点 [epochSec, lat, lon] (メモリのみ。霧・軌跡には即反映)
 const tracksLayer = L.layerGroup();   // 軌跡は既定でオフ
 
 // 霧: 画面全体を覆い、各点の周りを destination-out でくり抜く
@@ -102,7 +103,7 @@ const Fog = L.Layer.extend({
     const r = Math.max(3, +$('radius').value / mpp);
     const b = m.getBounds().pad(r * mpp / 111000 + 0.01);
     const step = Math.max(1, r / 3), seen = new Set();   // 近接点は同じピクセルセルに丸めて描画を減らす
-    for (const [, lat, lon] of points) {
+    for (const [, lat, lon] of points.concat(live)) {
       if (!b.contains([lat, lon])) continue;
       const p = m.latLngToContainerPoint([lat, lon]);
       const key = Math.round(p.x / step) + ',' + Math.round(p.y / step);
@@ -253,17 +254,22 @@ $('logout').onclick = () => {
 const me = L.layerGroup().addTo(map);
 let quietLocate = false;   // 起動時の自動取得は失敗してもパネルを開かない
 $('locate').onclick = () => {
+  if (watching) { follow = true; if (lastPos) map.setView(lastPos, Math.max(map.getZoom(), 16)); return; }   // 追跡中は取得し直さず、直近の位置へ戻る
   if (!navigator.geolocation) { $('stats').textContent = 'この端末では現在地を取得できません'; return; }
   quietLocate = false;
   map.locate({ setView: true, maxZoom: 17, enableHighAccuracy: true, timeout: 15000 });
 };
 map.on('locationfound', (e) => {
+  lastPos = e.latlng;
+  if (watching) onLive(e);
   fitted = true;   // 現在地に合わせたので、データ読み込み時の全体表示で上書きしない
   me.clearLayers();
   L.circle(e.latlng, { radius: e.accuracy, color: '#2563eb', weight: 1, fillOpacity: 0.12, interactive: false }).addTo(me);
   L.circleMarker(e.latlng, { radius: 7, color: '#fff', weight: 2, fillColor: '#2563eb', fillOpacity: 1, interactive: false }).addTo(me);
 });
 map.on('locationerror', async (e) => {
+  if (watching && e.code === 3) return;   // 追跡中のタイムアウトは次の測位を待つだけ
+  if (watching && e.code === 1) setLive(false);   // 許可が取り消されたら止める
   if (quietLocate) { quietLocate = false; return; }
   setPanel(true);
   const why = { 1: '位置情報が許可されていません。ブラウザ(iOS は Safari の ぁあ → Webサイトの設定 → 位置情報)と、端末の位置情報サービスを許可してください',
@@ -273,6 +279,41 @@ map.on('locationerror', async (e) => {
   try { st = ` [ブラウザの状態: ${(await navigator.permissions.query({ name: 'geolocation' })).state}]`; } catch {}
   $('stats').textContent = '現在地を取得できません: ' + (why[e.code] || e.message) + st;
 });
+
+// ---------- リアルタイム追跡 (車の移動など) ----------
+// watchPosition で位置を連続取得し、軌跡(橙)と霧の晴れ範囲に即反映する。点は保存しない(正式な記録は Dawarich → export 経由)。
+// ブラウザはバックグラウンドだと測位が止まるので、追跡中は画面を点けたままにする (Wake Lock)。
+const LIVE_MAX_ACC_M = 100, LIVE_MIN_STEP_M = 5;
+let watching = false, follow = false, lastPos = null, wake = null;
+const liveLine = L.polyline([], { color: '#f59e0b', weight: 4, opacity: 0.9, interactive: false }).addTo(map);
+async function lockScreen() { try { wake = await navigator.wakeLock.request('screen'); } catch {} }
+document.addEventListener('visibilitychange', () => { if (watching && document.visibilityState === 'visible') lockScreen(); });
+map.on('dragstart', () => { follow = false; });   // 地図を動かしたら追従をやめる (◎ で戻る)
+function onLive(e) {
+  if (e.accuracy > LIVE_MAX_ACC_M) return;
+  const last = live[live.length - 1];
+  if (last && map.distance([last[1], last[2]], e.latlng) < LIVE_MIN_STEP_M) return;
+  live.push([Math.floor(Date.now() / 1000), e.latlng.lat, e.latlng.lng]);
+  liveLine.addLatLng(e.latlng);
+  if (follow) map.setView(e.latlng, Math.max(map.getZoom(), 16));   // move で霧も再描画される
+  else if ($('fog').checked) fog.redraw();
+}
+function setLive(on) {
+  if (on && !navigator.geolocation) { $('stats').textContent = 'この端末では現在地を取得できません'; return; }
+  watching = on; follow = on;
+  $('live').classList.toggle('on', on);
+  $('live').setAttribute('aria-pressed', on);
+  if (on) {
+    quietLocate = false;
+    map.locate({ watch: true, setView: false, enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
+    lockScreen();
+  } else {
+    map.stopLocate();
+    try { wake && wake.release(); } catch {}
+    wake = null;
+  }
+}
+$('live').onclick = () => setLive(!watching);
 
 // ---------- 表示位置の保存 / 起動時の初期位置 ----------
 // 起動 (新しいセッション) は現在地へ。同じセッションでの再表示 (タブの再読み込み・復帰) は最後に見ていた位置を維持。
@@ -332,6 +373,7 @@ $('bt').textContent = window.BUILD_INFO ? `build ${BUILD_INFO.sha} (${BUILD_INFO
   if ($('tracks').checked) tracksLayer.addTo(map);
   $('ui').hidden = false;
   $('locate').hidden = false;
+  $('live').hidden = false;
   initialView();
   load();
 })();

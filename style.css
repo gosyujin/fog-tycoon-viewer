@@ -19,6 +19,12 @@ body { font: 14px/1.4 system-ui, sans-serif; }
   background: rgba(20, 24, 33, .85); color: #aab; font-size: 11px; line-height: 1.5;
 }
 #statbar:empty { display: none; }
+/* リアルタイム追跡のON/OFF。現在地ボタンのすぐ右 */
+#live {
+  position: absolute; z-index: 1000; left: calc(50% + 30px);
+  bottom: calc(34px + env(safe-area-inset-bottom));
+}
+#live.on { background: #dc2626; color: #fff; }
 .fab {
   width: 40px; height: 40px; border: 0; border-radius: 50%; cursor: pointer; padding: 0;
   background: rgba(20, 24, 33, .85); color: #eee; font-size: 22px; line-height: 40px;
