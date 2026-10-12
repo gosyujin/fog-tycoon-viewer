@@ -75,6 +75,29 @@ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
 let all = [], points = [];
 const live = [];   // リアルタイム追跡で取った点 [epochSec, lat, lon] (メモリのみ。霧・軌跡には即反映)
 const tracksLayer = L.layerGroup();   // 軌跡は既定でオフ
+let cells = [];   // 濃淡モード用: [lat, lon, 訪問日数] (CELL_M 四方のセル単位で集計)
+const CELL_M = 20;
+const mask = document.createElement('canvas'), mctx = mask.getContext('2d', { willReadFrequently: true });
+
+// 点を CELL_M のセルに丸め、セルごとに「訪問した日数」を数える (点数は 10m 間引きで移動距離比例になるため回数には使わない)
+function buildCells() {
+  if (!points.length) { cells = []; return; }
+  let sum = 0;
+  for (const p of points) sum += p[1];
+  const dLat = CELL_M / 111000, dLon = dLat / Math.cos((sum / points.length) * Math.PI / 180);
+  const tz = new Date().getTimezoneOffset() * 60, byCell = new Map();
+  for (const [ts, lat, lon] of points) {
+    const key = Math.floor(lat / dLat) + ',' + Math.floor(lon / dLon);
+    let days = byCell.get(key);
+    if (!days) byCell.set(key, (days = new Set()));
+    days.add(Math.floor((ts - tz) / 86400));
+  }
+  cells = [];
+  for (const [key, days] of byCell) {
+    const [i, j] = key.split(',').map(Number);
+    cells.push([(i + 0.5) * dLat, (j + 0.5) * dLon, days.size]);
+  }
+}
 
 // 霧: 画面全体を覆い、各点の周りを destination-out でくり抜く
 const Fog = L.Layer.extend({
@@ -102,6 +125,7 @@ const Fog = L.Layer.extend({
     const mpp = 40075016.686 * Math.cos(m.getCenter().lat * Math.PI / 180) / (256 * 2 ** m.getZoom());
     const r = Math.max(3, +$('radius').value / mpp);
     const b = m.getBounds().pad(r * mpp / 111000 + 0.01);
+    if ($('fogmode').value === 'density') return this._density(g, m, size, r, b);
     const step = Math.max(1, r / 3), seen = new Set();   // 近接点は同じピクセルセルに丸めて描画を減らす
     for (const [, lat, lon] of points.concat(live)) {
       if (!b.contains([lat, lon])) continue;
@@ -116,6 +140,35 @@ const Fog = L.Layer.extend({
       g.fillStyle = grad;
       g.beginPath(); g.arc(p.x, p.y, r, 0, Math.PI * 2); g.fill();
     }
+  },
+  // 濃淡: セルごとの晴れ具合 (log(1+日数) / log(1+full)) を lighten で最大値合成したマスクを作り、輝度をアルファにして霧からくり抜く
+  // リアルタイム追跡の点は「今日1日分」として扱う
+  _density(g, m, size, r, b) {
+    const w = Math.ceil(size.x), h = Math.ceil(size.y);
+    if (!w || !h) return;
+    mask.width = w; mask.height = h;
+    mctx.fillStyle = '#000';
+    mctx.fillRect(0, 0, w, h);
+    mctx.globalCompositeOperation = 'lighten';
+    const full = +$('full').value, denom = Math.log(1 + full);
+    const spot = (lat, lon, n) => {
+      if (!b.contains([lat, lon])) return;
+      const p = m.latLngToContainerPoint([lat, lon]);
+      const v = Math.round(255 * Math.min(1, Math.log(1 + n) / denom));
+      const grad = mctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+      grad.addColorStop(0, `rgb(${v},${v},${v})`);
+      grad.addColorStop(0.6, `rgb(${v},${v},${v})`);
+      grad.addColorStop(1, 'rgb(0,0,0)');
+      mctx.fillStyle = grad;
+      mctx.beginPath(); mctx.arc(p.x, p.y, r, 0, Math.PI * 2); mctx.fill();
+    };
+    for (const [lat, lon, n] of cells) spot(lat, lon, n);
+    for (const [, lat, lon] of live) spot(lat, lon, 1);
+    mctx.globalCompositeOperation = 'source-over';
+    const img = mctx.getImageData(0, 0, w, h), d = img.data;
+    for (let i = 0; i < d.length; i += 4) { d[i + 3] = d[i]; d[i] = d[i + 1] = d[i + 2] = 0; }
+    mctx.putImageData(img, 0, 0);
+    g.drawImage(mask, 0, 0, w, h);
   },
 });
 const fog = new Fog();
@@ -141,6 +194,7 @@ function applyRange() {
   points = all.filter((p) => p[0] >= since);
   const km = points.reduce((s, p, i) => (i && p[0] - points[i - 1][0] <= GAP_SEC ? s + map.distance([points[i - 1][1], points[i - 1][2]], [p[1], p[2]]) : s), 0) / 1000;
   $('stats').textContent = `${points.length.toLocaleString()} 点 / 約 ${km.toFixed(1)} km${note}`;
+  buildCells();
   drawTracks();
   if ($('fog').checked) fog.redraw();
 }
@@ -215,7 +269,7 @@ const ONE_FINGER_DIR = 1, ONE_FINGER_PX_PER_ZOOM = 90, DOUBLE_TAP_MS = 300, DOUB
 })();
 
 // ---------- 設定の保存・復元 (この端末の localStorage) ----------
-const SETTING_IDS = ['fog', 'tracks', 'radius', 'density', 'range'];
+const SETTING_IDS = ['fog', 'tracks', 'radius', 'density', 'range', 'fogmode', 'full'];
 function saveSettings() {
   const v = {};
   for (const id of SETTING_IDS) v[id] = $(id).type === 'checkbox' ? $(id).checked : $(id).value;
@@ -232,6 +286,8 @@ function restoreSettings() {
   }
   $('rv').textContent = $('radius').value;
   $('dv').textContent = $('density').value;
+  $('fv').textContent = $('full').value;
+  $('fullrow').hidden = $('fogmode').value !== 'density';
 }
 
 // ---------- UI ----------
@@ -243,6 +299,8 @@ $('tracks').onchange = (e) => { saveSettings(); e.target.checked ? tracksLayer.a
 $('radius').oninput = (e) => { $('rv').textContent = e.target.value; saveSettings(); if ($('fog').checked) fog.redraw(); };
 $('density').oninput = (e) => { $('dv').textContent = e.target.value; saveSettings(); if ($('fog').checked) fog.redraw(); };
 $('range').onchange = () => { saveSettings(); applyRange(); };
+$('fogmode').onchange = () => { saveSettings(); $('fullrow').hidden = $('fogmode').value !== 'density'; if ($('fog').checked) fog.redraw(); };
+$('full').oninput = (e) => { $('fv').textContent = e.target.value; saveSettings(); if ($('fog').checked) fog.redraw(); };
 $('reload').onclick = load;
 $('logout').onclick = () => {
   if (!confirm('この端末の Dropbox 認可と控えを削除しますか?')) return;

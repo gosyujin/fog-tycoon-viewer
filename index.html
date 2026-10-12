@@ -18,6 +18,13 @@
     <div id="stats">読み込み中…</div>
     <label><input type="checkbox" id="fog" checked> 霧</label>
     <label><input type="checkbox" id="tracks"> 軌跡</label>
+    <label>霧の種類
+      <select id="fogmode">
+        <option value="binary">0/1 (通った所は全部晴れ)</option>
+        <option value="density">濃淡 (通った日数)</option>
+      </select>
+    </label>
+    <label id="fullrow" hidden>完全に晴れる日数 <input type="range" id="full" min="2" max="30" value="5"> <span id="fv">5</span>日</label>
     <label>霧の濃さ <input type="range" id="density" min="30" max="100" step="5" value="88"> <span id="dv">88</span>%</label>
     <label>晴れ半径 <input type="range" id="radius" min="20" max="300" value="80"> <span id="rv">80</span>m</label>
     <label>期間
