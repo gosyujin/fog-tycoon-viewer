@@ -78,6 +78,7 @@ const tracksLayer = L.layerGroup();   // 軌跡は既定でオフ
 let mode = 'fog';   // 'fog' (通った所は全部晴れ) | 'heat' (訪問日数のヒートマップ)
 let cells = [];   // 濃淡モード用: [lat, lon, 訪問日数] (CELL_M 四方のセル単位で集計)
 const CELL_M = 20;
+const INTERP_SEC = 10 * 60, INTERP_M = 120;   // この範囲を超えて離れた点どうしは補間しない (街区を突っ切る直線を作らない。霧で丸が離れて見える間隔と揃える)
 const mask = document.createElement('canvas'), mctx = mask.getContext('2d', { willReadFrequently: true });
 
 // ヒートマップの色: 訪問日数ごとの基準色 [この日数以上, 色]。凡例 (#legend) と揃える。間の輝度は色を補間してなめらかにつなぐ
@@ -114,7 +115,7 @@ for (let v = 0; v < 256; v++) {
 }
 
 // 点を CELL_M のセルに丸め、セルごとに「訪問した日数」を数える (点数は 10m 間引きで移動距離比例になるため回数には使わない)。
-// GPS の点は疎なので、軌跡と同じ条件 (GAP_SEC / GAP_M 以内) で隣り合う点の間も CELL_M/2 刻みで補間し、通った道を連続させる
+// GPS の点は疎なので、近い点どうし (INTERP_SEC / INTERP_M 以内) は間も CELL_M/2 刻みで補間し、通った道を連続させる
 function buildCells() {
   if (!points.length) { cells = []; return; }
   let sum = 0;
@@ -131,9 +132,9 @@ function buildCells() {
   let prev = null;
   for (const p of points) {
     const [ts, lat, lon] = p, day = Math.floor((ts - tz) / 86400);
-    if (prev && ts - prev[0] <= GAP_SEC) {
+    if (prev && ts - prev[0] <= INTERP_SEC) {
       const d = Math.hypot((lat - prev[1]) * 111000, (lon - prev[2]) * 111000 * cosLat);
-      if (d <= GAP_M) {
+      if (d <= INTERP_M) {
         const n = Math.ceil(d / (CELL_M / 2));
         for (let k = 1; k < n; k++) add(prev[1] + (lat - prev[1]) * k / n, prev[2] + (lon - prev[2]) * k / n, day);
       }
@@ -375,15 +376,35 @@ $('logout').onclick = () => {
 // 現在地 (Geolocation は HTTPS が必要。GitHub Pages なら可)
 const me = L.layerGroup().addTo(map);
 let quietLocate = false;   // 起動時の自動取得は失敗してもパネルを開かない
-let locateRetry = 0;
+// 起動時の現在地合わせ: iOS は起動直後の1回取得が失敗しやすいので、連続測位 (watch) で最初の1点が取れるまで待つ。
+// 取れたら現在地へ寄せて止める。地図を動かしたら諦める。INITIAL_LOCATE_MS 待っても取れなければ諦めて、理由を左下に出す。
+const INITIAL_LOCATE_MS = 60000;
+let initialLocating = false, initialTimer = 0;
+const onInitialDrag = () => stopInitialLocate();   // dragstart のイベントを「理由」として渡さない
+function stopInitialLocate(why) {
+  if (!initialLocating) return;
+  initialLocating = false; quietLocate = false;
+  clearTimeout(initialTimer);
+  map.off('dragstart', onInitialDrag);
+  if (!watching) map.stopLocate();
+  if (why) $('bt').textContent += ` · 現在地を取得できませんでした (${why})`;
+}
+function startInitialLocate() {
+  initialLocating = true; quietLocate = true;
+  map.on('dragstart', onInitialDrag);
+  initialTimer = setTimeout(() => stopInitialLocate('時間切れ'), INITIAL_LOCATE_MS);
+  map.locate({ watch: true, setView: false, enableHighAccuracy: true, timeout: 30000, maximumAge: 60000 });
+}
 $('locate').onclick = () => {
   if (watching) { follow = true; if (lastPos) map.setView(lastPos, Math.max(map.getZoom(), 16)); return; }   // 追跡中は取得し直さず、直近の位置へ戻る
   if (!navigator.geolocation) { $('stats').textContent = 'この端末では現在地を取得できません'; return; }
+  stopInitialLocate();
   quietLocate = false;
   map.locate({ setView: true, maxZoom: 17, enableHighAccuracy: true, timeout: 15000 });
 };
 map.on('locationfound', (e) => {
   lastPos = e.latlng;
+  if (initialLocating) { map.setView(e.latlng, e.accuracy > 500 ? 15 : 17); stopInitialLocate(); }   // 最初の1点で現在地へ
   if (watching) onLive(e);
   fitted = true;   // 現在地に合わせたので、データ読み込み時の全体表示で上書きしない
   me.clearLayers();
@@ -393,10 +414,8 @@ map.on('locationfound', (e) => {
 map.on('locationerror', async (e) => {
   if (watching && e.code === 3) return;   // 追跡中のタイムアウトは次の測位を待つだけ
   if (watching && e.code === 1) setLive(false);   // 許可が取り消されたら止める
-  if (quietLocate) {
-    if (locateRetry > 0) { locateRetry--; map.locate({ setView: true, maxZoom: 17, enableHighAccuracy: false, timeout: 20000, maximumAge: 600000 }); return; }
-    quietLocate = false; return;
-  }
+  if (initialLocating) { if (e.code === 1) stopInitialLocate('許可なし'); return; }   // 許可がなければ諦める。それ以外は次の測位を待つ
+  if (quietLocate) { quietLocate = false; return; }
   setPanel(true);
   const why = { 1: '位置情報が許可されていません。ブラウザ(iOS は Safari の ぁあ → Webサイトの設定 → 位置情報)と、端末の位置情報サービスを許可してください',
     2: '位置を特定できません。電波の良い場所でもう一度試してください', 3: '位置の取得がタイムアウトしました。もう一度試してください' };
@@ -464,9 +483,7 @@ function initialView() {
   SS.set('fog_started', '1');
   if (v && isFinite(v.lat) && isFinite(v.lng) && isFinite(v.zoom)) { map.setView([v.lat, v.lng], v.zoom); fitted = true; return; }
   if (!navigator.geolocation) return;
-  quietLocate = true;   // 失敗したらデータ全体表示のまま
-  locateRetry = 1;      // 起動直後は測位が間に合わず失敗しやすいので、精度を落として1回だけ取り直す
-  map.locate({ setView: true, maxZoom: 17, enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
+  startInitialLocate();   // 失敗したらデータ全体表示のまま
 }
 
 // ---------- ビルド表示・更新確認 (gyazo-tycoon-viewer と同じ方式) ----------
