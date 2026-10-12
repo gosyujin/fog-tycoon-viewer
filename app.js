@@ -68,8 +68,10 @@ async function fetchPoints() {
 
 // ---------- 地図 ----------
 const map = L.map('map', { zoomSnap: 0.5, preferCanvas: true });
+// crossOrigin: Service Worker (sw.js) がタイルを CORS の応答として保存するため。keepBuffer: 動かした後に戻っても再読み込みしない。
+// updateWhenZooming: ピンチ中は読み込まず、止まってから読む (途中のズームの無駄な読み込みを避ける)
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution: '© OpenStreetMap contributors', maxZoom: 19,
+  attribution: '© OpenStreetMap contributors', maxZoom: 19, crossOrigin: true, keepBuffer: 4, updateWhenZooming: false,
 }).addTo(map);
 
 let all = [], points = [];
@@ -506,8 +508,13 @@ $('bt').textContent = window.BUILD_INFO ? `build ${BUILD_INFO.sha} (${BUILD_INFO
 })();
 
 // ---------- 起動 ----------
+// 初期表示は前回の位置から (東京 → データ全体 → 現在地 と動くと、遠いタイルを何度も読んで待たされる)。
+// 前回の位置がない・広域 (zoom<10) のときだけ、従来どおり東京 → データ全体の表示。
+const resumable = (v) => v && isFinite(v.lat) && isFinite(v.lng) && isFinite(v.zoom) && v.zoom >= 10;
+if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));   // 地図タイルのキャッシュ
 (async () => {
-  map.setView([35.68, 139.76], 11);
+  if (resumable(prevView)) { map.setView([prevView.lat, prevView.lng], prevView.zoom); fitted = true; }   // fitted: データ読み込み時の全体表示で飛ばさない
+  else map.setView([35.68, 139.76], 11);
   try { await finishLogin(); } catch (err) { $('loginErr').textContent = err.message; }
   if (!LS.get('fog_refresh')) {
     $('redir').textContent = REDIR;
