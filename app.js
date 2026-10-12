@@ -80,16 +80,25 @@ let cells = [];   // 濃淡モード用: [lat, lon, 訪問日数] (CELL_M 四方
 const CELL_M = 20;
 const mask = document.createElement('canvas'), mctx = mask.getContext('2d', { willReadFrequently: true });
 
-// ヒートマップの段階: [この日数以上, 色]。凡例 (#legend) の表示と揃える
+// ヒートマップの色: 訪問日数ごとの基準色 [この日数以上, 色]。凡例 (#legend) と揃える。間の輝度は色を補間してなめらかにつなぐ
 const HEAT_STEPS = [[1, [59, 130, 246]], [2, [34, 197, 94]], [4, [250, 204, 21]], [10, [239, 68, 68]]];
-const HEAT_COLORS = HEAT_STEPS.map((s) => s[1]), HEAT_ALPHA = 0.55, HEAT_EDGE = 0.6;
+const HEAT_SCALE = 1;   // マスクの解像度 (CSS px 比)。上げるほど縁がきれいだが再描画が重い
+const HEAT_ALPHA = 0.55, HEAT_FEATHER = [0.05, 0.7];   // 色が付く縁は 1日の輝度の 5%→70% で透明→不透明に立ち上げてぼかす
 const heatT = (n) => Math.min(1, Math.log(1 + n) / Math.log(1 + HEAT_STEPS[HEAT_STEPS.length - 1][0]));   // 日数 → 0..1
 const heatV = (n) => Math.round(255 * heatT(n));
-// 輝度 0..255 → 段階 (0 は色なし)
-const HEAT_LEVEL = new Uint8Array(256);
+// 輝度 0..255 → RGBA (little-endian の Uint32 に詰めて、ピクセルごとの変換を1回の参照で済ませる)
+const HEAT_RGBA = new Uint32Array(256);
 for (let v = 0; v < 256; v++) {
-  const lv = HEAT_STEPS.reduce((k, [n], i) => (v >= (i ? heatV(n) : Math.round(heatV(1) * HEAT_EDGE)) ? i + 1 : k), 0);
-  HEAT_LEVEL[v] = lv;
+  let c = HEAT_STEPS[0][1];
+  for (let k = 1; k < HEAT_STEPS.length; k++) {
+    const v0 = heatV(HEAT_STEPS[k - 1][0]), v1 = heatV(HEAT_STEPS[k][0]), c0 = HEAT_STEPS[k - 1][1], c1 = HEAT_STEPS[k][1];
+    if (v >= v1) { c = c1; continue; }
+    if (v > v0) c = c0.map((x, i) => Math.round(x + (c1[i] - x) * (v - v0) / (v1 - v0)));
+    break;
+  }
+  const lo = heatV(1) * HEAT_FEATHER[0], hi = heatV(1) * HEAT_FEATHER[1];
+  const a = Math.round(255 * HEAT_ALPHA * Math.max(0, Math.min(1, (v - lo) / (hi - lo))));
+  HEAT_RGBA[v] = ((a << 24) | (c[2] << 16) | (c[1] << 8) | c[0]) >>> 0;
 }
 
 // 点を CELL_M のセルに丸め、セルごとに「訪問した日数」を数える (点数は 10m 間引きで移動距離比例になるため回数には使わない)
@@ -156,20 +165,22 @@ const Fog = L.Layer.extend({
       g.beginPath(); g.arc(p.x, p.y, r, 0, Math.PI * 2); g.fill();
     }
   },
-  // ヒートマップ: セルごとの訪問日数を、最大値合成(lighten)したマスクの輝度に落とし、段階(1 / 2-3 / 4-9 / 10日〜)の色に塗り分ける。
+  // ヒートマップ: セルごとの訪問日数を、最大値合成(lighten)したマスクの輝度に落とし、色に変換して重ねる。
   // マスクは各セルの中心が最大・縁に向かって下がるので、赤い芯の周りに黄・緑・青の輪が出る。霧は出さない (未探索地域もそのまま見せる)。
   // リアルタイム追跡の点は「今日1日分」として扱う
   _heat(g, m, size, r, b) {
     const w = Math.ceil(size.x), h = Math.ceil(size.y);
     if (!w || !h) return;
-    mask.width = w; mask.height = h;
+    const sc = HEAT_SCALE, mw = Math.ceil(w * sc), mh = Math.ceil(h * sc);   // 縁はぼかしてあるので、マスクは低解像度でよい (拡大時に補間される)
+    if (mask.width !== mw || mask.height !== mh) { mask.width = mw; mask.height = mh; }   // 毎回作り直さない (確保が重い)
+    mctx.setTransform(sc, 0, 0, sc, 0, 0);
     mctx.fillStyle = '#000';
     mctx.fillRect(0, 0, w, h);
     mctx.globalCompositeOperation = 'lighten';
     const spot = (lat, lon, n) => {
       if (!b.contains([lat, lon])) return;
       const p = m.latLngToContainerPoint([lat, lon]);
-      const v = Math.round(255 * heatT(n));
+      const v = heatV(n);
       const grad = mctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
       grad.addColorStop(0, `rgb(${v},${v},${v})`);
       grad.addColorStop(0.6, `rgb(${v},${v},${v})`);
@@ -180,13 +191,9 @@ const Fog = L.Layer.extend({
     for (const [lat, lon, n] of cells) spot(lat, lon, n);
     for (const [, lat, lon] of live) spot(lat, lon, 1);
     mctx.globalCompositeOperation = 'source-over';
-    const img = mctx.getImageData(0, 0, w, h), d = img.data, v = new Uint8Array(w * h);
-    for (let i = 0; i < v.length; i++) v[i] = d[i * 4];
-    for (let i = 0; i < v.length; i++) {
-      const lv = HEAT_LEVEL[v[i]], c = lv ? HEAT_COLORS[lv - 1] : null;
-      d[i * 4] = c ? c[0] : 0; d[i * 4 + 1] = c ? c[1] : 0; d[i * 4 + 2] = c ? c[2] : 0;
-      d[i * 4 + 3] = c ? Math.round(255 * HEAT_ALPHA) : 0;
-    }
+    mctx.setTransform(1, 0, 0, 1, 0, 0);
+    const img = mctx.getImageData(0, 0, mask.width, mask.height), d8 = img.data, d32 = new Uint32Array(d8.buffer);
+    for (let i = 0; i < d32.length; i++) d32[i] = HEAT_RGBA[d8[i * 4]];
     mctx.putImageData(img, 0, 0);
     g.globalCompositeOperation = 'source-over';
     g.drawImage(mask, 0, 0, w, h);
