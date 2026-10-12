@@ -85,13 +85,11 @@ const HEAT_STEPS = [[1, [59, 130, 246]], [2, [34, 197, 94]], [4, [250, 204, 21]]
 const HEAT_COLORS = HEAT_STEPS.map((s) => s[1]), HEAT_ALPHA = 0.55, HEAT_EDGE = 0.6;
 const heatT = (n) => Math.min(1, Math.log(1 + n) / Math.log(1 + HEAT_STEPS[HEAT_STEPS.length - 1][0]));   // 日数 → 0..1
 const heatV = (n) => Math.round(255 * heatT(n));
-// 輝度 0..255 → 段階 (0 は色なし) / 霧のくり抜き量 (色の付く下限の手前で 0→255 に立ち上げて縁をなだらかに)
-const HEAT_LEVEL = new Uint8Array(256), HEAT_CLEAR = new Uint8Array(256);
+// 輝度 0..255 → 段階 (0 は色なし)
+const HEAT_LEVEL = new Uint8Array(256);
 for (let v = 0; v < 256; v++) {
   const lv = HEAT_STEPS.reduce((k, [n], i) => (v >= (i ? heatV(n) : Math.round(heatV(1) * HEAT_EDGE)) ? i + 1 : k), 0);
-  const lo = Math.round(heatV(1) * 0.3), hi = Math.round(heatV(1) * HEAT_EDGE);
   HEAT_LEVEL[v] = lv;
-  HEAT_CLEAR[v] = v >= hi ? 255 : v <= lo ? 0 : Math.round(255 * (v - lo) / (hi - lo));
 }
 
 // 点を CELL_M のセルに丸め、セルごとに「訪問した日数」を数える (点数は 10m 間引きで移動距離比例になるため回数には使わない)
@@ -134,8 +132,10 @@ const Fog = L.Layer.extend({
     c.style.width = size.x + 'px'; c.style.height = size.y + 'px';
     const g = c.getContext('2d');
     g.scale(dpr, dpr);
-    g.fillStyle = `rgba(8, 10, 16, ${+$('density').value / 100})`;
-    g.fillRect(0, 0, size.x, size.y);
+    if (mode === 'fog') {
+      g.fillStyle = `rgba(8, 10, 16, ${+$('density').value / 100})`;
+      g.fillRect(0, 0, size.x, size.y);
+    }
     g.globalCompositeOperation = 'destination-out';
     const mpp = 40075016.686 * Math.cos(m.getCenter().lat * Math.PI / 180) / (256 * 2 ** m.getZoom());
     const r = Math.max(3, +$('radius').value / mpp);
@@ -157,7 +157,7 @@ const Fog = L.Layer.extend({
     }
   },
   // ヒートマップ: セルごとの訪問日数を、最大値合成(lighten)したマスクの輝度に落とし、段階(1 / 2-3 / 4-9 / 10日〜)の色に塗り分ける。
-  // マスクは各セルの中心が最大・縁に向かって下がるので、赤い芯の周りに黄・緑・青の輪が出る。通った場所は霧も晴らす。
+  // マスクは各セルの中心が最大・縁に向かって下がるので、赤い芯の周りに黄・緑・青の輪が出る。霧は出さない (未探索地域もそのまま見せる)。
   // リアルタイム追跡の点は「今日1日分」として扱う
   _heat(g, m, size, r, b) {
     const w = Math.ceil(size.x), h = Math.ceil(size.y);
@@ -182,10 +182,6 @@ const Fog = L.Layer.extend({
     mctx.globalCompositeOperation = 'source-over';
     const img = mctx.getImageData(0, 0, w, h), d = img.data, v = new Uint8Array(w * h);
     for (let i = 0; i < v.length; i++) v[i] = d[i * 4];
-    for (let i = 0; i < v.length; i++) { d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = 0; d[i * 4 + 3] = HEAT_CLEAR[v[i]]; }
-    mctx.putImageData(img, 0, 0);
-    g.globalCompositeOperation = 'destination-out';
-    g.drawImage(mask, 0, 0, w, h);   // 霧をくり抜く
     for (let i = 0; i < v.length; i++) {
       const lv = HEAT_LEVEL[v[i]], c = lv ? HEAT_COLORS[lv - 1] : null;
       d[i * 4] = c ? c[0] : 0; d[i * 4 + 1] = c ? c[1] : 0; d[i * 4 + 2] = c ? c[2] : 0;
@@ -193,7 +189,7 @@ const Fog = L.Layer.extend({
     }
     mctx.putImageData(img, 0, 0);
     g.globalCompositeOperation = 'source-over';
-    g.drawImage(mask, 0, 0, w, h);   // 色を重ねる
+    g.drawImage(mask, 0, 0, w, h);
   },
 });
 const fog = new Fog();
@@ -344,6 +340,7 @@ $('logout').onclick = () => {
 // 現在地 (Geolocation は HTTPS が必要。GitHub Pages なら可)
 const me = L.layerGroup().addTo(map);
 let quietLocate = false;   // 起動時の自動取得は失敗してもパネルを開かない
+let locateRetry = 0;
 $('locate').onclick = () => {
   if (watching) { follow = true; if (lastPos) map.setView(lastPos, Math.max(map.getZoom(), 16)); return; }   // 追跡中は取得し直さず、直近の位置へ戻る
   if (!navigator.geolocation) { $('stats').textContent = 'この端末では現在地を取得できません'; return; }
@@ -361,7 +358,10 @@ map.on('locationfound', (e) => {
 map.on('locationerror', async (e) => {
   if (watching && e.code === 3) return;   // 追跡中のタイムアウトは次の測位を待つだけ
   if (watching && e.code === 1) setLive(false);   // 許可が取り消されたら止める
-  if (quietLocate) { quietLocate = false; return; }
+  if (quietLocate) {
+    if (locateRetry > 0) { locateRetry--; map.locate({ setView: true, maxZoom: 17, enableHighAccuracy: false, timeout: 20000, maximumAge: 600000 }); return; }
+    quietLocate = false; return;
+  }
   setPanel(true);
   const why = { 1: '位置情報が許可されていません。ブラウザ(iOS は Safari の ぁあ → Webサイトの設定 → 位置情報)と、端末の位置情報サービスを許可してください',
     2: '位置を特定できません。電波の良い場所でもう一度試してください', 3: '位置の取得がタイムアウトしました。もう一度試してください' };
@@ -413,17 +413,24 @@ const SS = {
   get(k) { try { return sessionStorage.getItem(k); } catch { return null; } },
   set(k, v) { try { sessionStorage.setItem(k, v); } catch {} },
 };
-map.on('moveend', () => {
+// 前回の表示位置。起動直後の setView (既定の東京) の moveend で上書きされる前に読んでおく
+let prevView = null;
+try { prevView = JSON.parse(LS.get('fog_view')); } catch {}
+const RESUME_MS = 10 * 60 * 1000;   // これ以上離れていたら「新規起動」とみなして現在地へ (タスクキル後の起動など)
+const saveView = () => {
   const c = map.getCenter();
-  LS.set('fog_view', JSON.stringify({ lat: c.lat, lng: c.lng, zoom: map.getZoom() }));
-});
+  LS.set('fog_view', JSON.stringify({ lat: c.lat, lng: c.lng, zoom: map.getZoom(), t: Date.now() }));
+};
+map.on('moveend', saveView);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveView(); });
+addEventListener('pagehide', saveView);
 function initialView() {
-  let v = null;
-  if (SS.get('fog_started')) { try { v = JSON.parse(LS.get('fog_view')); } catch {} }
+  const v = SS.get('fog_started') && prevView && Date.now() - prevView.t < RESUME_MS ? prevView : null;
   SS.set('fog_started', '1');
   if (v && isFinite(v.lat) && isFinite(v.lng) && isFinite(v.zoom)) { map.setView([v.lat, v.lng], v.zoom); fitted = true; return; }
   if (!navigator.geolocation) return;
   quietLocate = true;   // 失敗したらデータ全体表示のまま
+  locateRetry = 1;      // 起動直後は測位が間に合わず失敗しやすいので、精度を落として1回だけ取り直す
   map.locate({ setView: true, maxZoom: 17, enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
 }
 
