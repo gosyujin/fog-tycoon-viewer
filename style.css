@@ -6,7 +6,7 @@ body { font: 14px/1.4 system-ui, sans-serif; }
   display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
 }
 /* ダブルタップでページが拡大されるのを防ぐ。拡大縮小は地図(Leaflet)だけ */
-#ui, #ui *, #locate, #login, #login *, .leaflet-control, .leaflet-control * { touch-action: manipulation; }
+#ui, #ui *, #locate, #mode, #login, #login *, .leaflet-control, .leaflet-control * { touch-action: manipulation; }
 .fab, #panel button { -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none; }
 #locate {
   position: absolute; z-index: 1000; left: 50%; transform: translateX(-50%);   /* 画面中央 */
@@ -25,6 +25,19 @@ body { font: 14px/1.4 system-ui, sans-serif; }
   bottom: calc(34px + env(safe-area-inset-bottom));
 }
 #live.on { background: #dc2626; color: #fff; }
+/* 右下: 霧 / ヒートマップの切替 (現在地・追跡ボタンと同じ高さ) */
+#mode {
+  position: absolute; z-index: 1000; right: 10px;
+  bottom: calc(34px + env(safe-area-inset-bottom));
+  font-size: 20px;
+}
+#mode.on { background: #ea580c; color: #fff; }
+#legend {
+  position: absolute; z-index: 1000; right: 10px; bottom: calc(82px + env(safe-area-inset-bottom)); display: grid; gap: 2px;
+  padding: 6px 8px; border-radius: 6px; background: rgba(20, 24, 33, .85); color: #eee; font-size: 12px; pointer-events: none;
+}
+#legend span { display: flex; align-items: center; gap: 6px; }
+#legend i { width: 12px; height: 12px; border-radius: 2px; display: inline-block; }
 .fab {
   width: 40px; height: 40px; border: 0; border-radius: 50%; cursor: pointer; padding: 0;
   background: rgba(20, 24, 33, .85); color: #eee; font-size: 22px; line-height: 40px;

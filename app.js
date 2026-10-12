@@ -75,9 +75,24 @@ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
 let all = [], points = [];
 const live = [];   // リアルタイム追跡で取った点 [epochSec, lat, lon] (メモリのみ。霧・軌跡には即反映)
 const tracksLayer = L.layerGroup();   // 軌跡は既定でオフ
+let mode = 'fog';   // 'fog' (通った所は全部晴れ) | 'heat' (訪問日数のヒートマップ)
 let cells = [];   // 濃淡モード用: [lat, lon, 訪問日数] (CELL_M 四方のセル単位で集計)
 const CELL_M = 20;
 const mask = document.createElement('canvas'), mctx = mask.getContext('2d', { willReadFrequently: true });
+
+// ヒートマップの段階: [この日数以上, 色]。凡例 (#legend) の表示と揃える
+const HEAT_STEPS = [[1, [59, 130, 246]], [2, [34, 197, 94]], [4, [250, 204, 21]], [10, [239, 68, 68]]];
+const HEAT_COLORS = HEAT_STEPS.map((s) => s[1]), HEAT_ALPHA = 0.55, HEAT_EDGE = 0.6;
+const heatT = (n) => Math.min(1, Math.log(1 + n) / Math.log(1 + HEAT_STEPS[HEAT_STEPS.length - 1][0]));   // 日数 → 0..1
+const heatV = (n) => Math.round(255 * heatT(n));
+// 輝度 0..255 → 段階 (0 は色なし) / 霧のくり抜き量 (色の付く下限の手前で 0→255 に立ち上げて縁をなだらかに)
+const HEAT_LEVEL = new Uint8Array(256), HEAT_CLEAR = new Uint8Array(256);
+for (let v = 0; v < 256; v++) {
+  const lv = HEAT_STEPS.reduce((k, [n], i) => (v >= (i ? heatV(n) : Math.round(heatV(1) * HEAT_EDGE)) ? i + 1 : k), 0);
+  const lo = Math.round(heatV(1) * 0.3), hi = Math.round(heatV(1) * HEAT_EDGE);
+  HEAT_LEVEL[v] = lv;
+  HEAT_CLEAR[v] = v >= hi ? 255 : v <= lo ? 0 : Math.round(255 * (v - lo) / (hi - lo));
+}
 
 // 点を CELL_M のセルに丸め、セルごとに「訪問した日数」を数える (点数は 10m 間引きで移動距離比例になるため回数には使わない)
 function buildCells() {
@@ -125,7 +140,7 @@ const Fog = L.Layer.extend({
     const mpp = 40075016.686 * Math.cos(m.getCenter().lat * Math.PI / 180) / (256 * 2 ** m.getZoom());
     const r = Math.max(3, +$('radius').value / mpp);
     const b = m.getBounds().pad(r * mpp / 111000 + 0.01);
-    if ($('fogmode').value === 'density') return this._density(g, m, size, r, b);
+    if (mode === 'heat') return this._heat(g, m, size, r, b);
     const step = Math.max(1, r / 3), seen = new Set();   // 近接点は同じピクセルセルに丸めて描画を減らす
     for (const [, lat, lon] of points.concat(live)) {
       if (!b.contains([lat, lon])) continue;
@@ -141,20 +156,20 @@ const Fog = L.Layer.extend({
       g.beginPath(); g.arc(p.x, p.y, r, 0, Math.PI * 2); g.fill();
     }
   },
-  // 濃淡: セルごとの晴れ具合 (log(1+日数) / log(1+full)) を lighten で最大値合成したマスクを作り、輝度をアルファにして霧からくり抜く
+  // ヒートマップ: セルごとの訪問日数を、最大値合成(lighten)したマスクの輝度に落とし、段階(1 / 2-3 / 4-9 / 10日〜)の色に塗り分ける。
+  // マスクは各セルの中心が最大・縁に向かって下がるので、赤い芯の周りに黄・緑・青の輪が出る。通った場所は霧も晴らす。
   // リアルタイム追跡の点は「今日1日分」として扱う
-  _density(g, m, size, r, b) {
+  _heat(g, m, size, r, b) {
     const w = Math.ceil(size.x), h = Math.ceil(size.y);
     if (!w || !h) return;
     mask.width = w; mask.height = h;
     mctx.fillStyle = '#000';
     mctx.fillRect(0, 0, w, h);
     mctx.globalCompositeOperation = 'lighten';
-    const full = +$('full').value, denom = Math.log(1 + full);
     const spot = (lat, lon, n) => {
       if (!b.contains([lat, lon])) return;
       const p = m.latLngToContainerPoint([lat, lon]);
-      const v = Math.round(255 * Math.min(1, Math.log(1 + n) / denom));
+      const v = Math.round(255 * heatT(n));
       const grad = mctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
       grad.addColorStop(0, `rgb(${v},${v},${v})`);
       grad.addColorStop(0.6, `rgb(${v},${v},${v})`);
@@ -165,10 +180,20 @@ const Fog = L.Layer.extend({
     for (const [lat, lon, n] of cells) spot(lat, lon, n);
     for (const [, lat, lon] of live) spot(lat, lon, 1);
     mctx.globalCompositeOperation = 'source-over';
-    const img = mctx.getImageData(0, 0, w, h), d = img.data;
-    for (let i = 0; i < d.length; i += 4) { d[i + 3] = d[i]; d[i] = d[i + 1] = d[i + 2] = 0; }
+    const img = mctx.getImageData(0, 0, w, h), d = img.data, v = new Uint8Array(w * h);
+    for (let i = 0; i < v.length; i++) v[i] = d[i * 4];
+    for (let i = 0; i < v.length; i++) { d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = 0; d[i * 4 + 3] = HEAT_CLEAR[v[i]]; }
     mctx.putImageData(img, 0, 0);
-    g.drawImage(mask, 0, 0, w, h);
+    g.globalCompositeOperation = 'destination-out';
+    g.drawImage(mask, 0, 0, w, h);   // 霧をくり抜く
+    for (let i = 0; i < v.length; i++) {
+      const lv = HEAT_LEVEL[v[i]], c = lv ? HEAT_COLORS[lv - 1] : null;
+      d[i * 4] = c ? c[0] : 0; d[i * 4 + 1] = c ? c[1] : 0; d[i * 4 + 2] = c ? c[2] : 0;
+      d[i * 4 + 3] = c ? Math.round(255 * HEAT_ALPHA) : 0;
+    }
+    mctx.putImageData(img, 0, 0);
+    g.globalCompositeOperation = 'source-over';
+    g.drawImage(mask, 0, 0, w, h);   // 色を重ねる
   },
 });
 const fog = new Fog();
@@ -269,7 +294,7 @@ const ONE_FINGER_DIR = 1, ONE_FINGER_PX_PER_ZOOM = 90, DOUBLE_TAP_MS = 300, DOUB
 })();
 
 // ---------- 設定の保存・復元 (この端末の localStorage) ----------
-const SETTING_IDS = ['fog', 'tracks', 'radius', 'density', 'range', 'fogmode', 'full'];
+const SETTING_IDS = ['fog', 'tracks', 'radius', 'density', 'range'];
 function saveSettings() {
   const v = {};
   for (const id of SETTING_IDS) v[id] = $(id).type === 'checkbox' ? $(id).checked : $(id).value;
@@ -286,21 +311,29 @@ function restoreSettings() {
   }
   $('rv').textContent = $('radius').value;
   $('dv').textContent = $('density').value;
-  $('fv').textContent = $('full').value;
-  $('fullrow').hidden = $('fogmode').value !== 'density';
 }
 
 // ---------- UI ----------
 const setPanel = (open) => { $('panel').hidden = !open; $('gear').setAttribute('aria-expanded', open); };
 $('gear').onclick = () => setPanel($('panel').hidden);
 map.on('click', () => setPanel(false));
-$('fog').onchange = (e) => { saveSettings(); e.target.checked ? fog.addTo(map) : map.removeLayer(fog); };
+$('fog').onchange = (e) => { saveSettings(); e.target.checked ? fog.addTo(map) : map.removeLayer(fog); syncLegend(); };
 $('tracks').onchange = (e) => { saveSettings(); e.target.checked ? tracksLayer.addTo(map) : map.removeLayer(tracksLayer); };
 $('radius').oninput = (e) => { $('rv').textContent = e.target.value; saveSettings(); if ($('fog').checked) fog.redraw(); };
 $('density').oninput = (e) => { $('dv').textContent = e.target.value; saveSettings(); if ($('fog').checked) fog.redraw(); };
 $('range').onchange = () => { saveSettings(); applyRange(); };
-$('fogmode').onchange = () => { saveSettings(); $('fullrow').hidden = $('fogmode').value !== 'density'; if ($('fog').checked) fog.redraw(); };
-$('full').oninput = (e) => { $('fv').textContent = e.target.value; saveSettings(); if ($('fog').checked) fog.redraw(); };
+const syncLegend = () => { $('legend').hidden = !(mode === 'heat' && $('fog').checked); };
+function setMode(m) {
+  mode = m;
+  const heat = m === 'heat';
+  $('mode').textContent = heat ? '🔥' : '🌫';
+  $('mode').classList.toggle('on', heat);
+  $('mode').setAttribute('aria-pressed', heat);
+  $('mode').setAttribute('aria-label', heat ? 'ヒートマップ (押すと霧)' : '霧 (押すとヒートマップ)');
+  syncLegend();
+  if (map.hasLayer(fog)) fog.redraw();   // 起動時はまだ地図に載っていない
+}
+$('mode').onclick = () => { setMode(mode === 'heat' ? 'fog' : 'heat'); LS.set('fog_mode', mode); };
 $('reload').onclick = load;
 $('logout').onclick = () => {
   if (!confirm('この端末の Dropbox 認可と控えを削除しますか?')) return;
@@ -433,6 +466,8 @@ $('bt').textContent = window.BUILD_INFO ? `build ${BUILD_INFO.sha} (${BUILD_INFO
   $('ui').hidden = false;
   $('locate').hidden = false;
   $('live').hidden = false;
+  $('mode').hidden = false;
+  setMode(LS.get('fog_mode') === 'heat' ? 'heat' : 'fog');
   initialView();
   load();
 })();
