@@ -83,7 +83,9 @@ const mask = document.createElement('canvas'), mctx = mask.getContext('2d', { wi
 // ヒートマップの色: 訪問日数ごとの基準色 [この日数以上, 色]。凡例 (#legend) と揃える。間の輝度は色を補間してなめらかにつなぐ
 const HEAT_STEPS = [[1, [59, 130, 246]], [2, [34, 197, 94]], [4, [250, 204, 21]], [10, [239, 68, 68]]];
 const HEAT_SCALE = 1;   // マスクの解像度 (CSS px 比)。上げるほど縁がきれいだが再描画が重い
-const HEAT_ALPHA = 0.55, HEAT_FEATHER = [0.05, 0.7];   // 色が付く縁は 1日の輝度の 5%→70% で透明→不透明に立ち上げてぼかす
+const HEAT_ALPHA = 0.6, HEAT_FEATHER = [0.03, 0.6];   // 色が付く縁は 1日の輝度の 3%→60% で透明→不透明に立ち上げてぼかす
+// 各セルの輝度の落ち方 [半径比, 中心比]。ガウス分布のように中心から外へゆるやかに減らす (縁を硬い円にしない)
+const HEAT_PROFILE = [[0, 1], [0.15, 0.97], [0.3, 0.85], [0.5, 0.55], [0.7, 0.25], [0.85, 0.08], [1, 0]];
 const heatT = (n) => Math.min(1, Math.log(1 + n) / Math.log(1 + HEAT_STEPS[HEAT_STEPS.length - 1][0]));   // 日数 → 0..1
 const heatV = (n) => Math.round(255 * heatT(n));
 // 輝度 0..255 → RGBA (little-endian の Uint32 に詰めて、ピクセルごとの変換を1回の参照で済ませる)
@@ -182,9 +184,7 @@ const Fog = L.Layer.extend({
       const p = m.latLngToContainerPoint([lat, lon]);
       const v = heatV(n);
       const grad = mctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
-      grad.addColorStop(0, `rgb(${v},${v},${v})`);
-      grad.addColorStop(0.6, `rgb(${v},${v},${v})`);
-      grad.addColorStop(1, 'rgb(0,0,0)');
+      for (const [t, k] of HEAT_PROFILE) { const x = Math.round(v * k); grad.addColorStop(t, `rgb(${x},${x},${x})`); }
       mctx.fillStyle = grad;
       mctx.beginPath(); mctx.arc(p.x, p.y, r, 0, Math.PI * 2); mctx.fill();
     };
