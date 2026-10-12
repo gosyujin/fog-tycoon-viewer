@@ -343,7 +343,8 @@ $('bt').textContent = window.BUILD_INFO ? `build ${BUILD_INFO.sha} (${BUILD_INFO
 // デプロイ済みの sha が今のページと違えば ?v=<sha> 付き URL へ移動して読み直す
 (async () => {
   const cur = window.BUILD_INFO && BUILD_INFO.sha;
-  if (!cur || cur === 'dev' || /[?&](code|error)=/.test(location.search)) return;   // 認可の戻り(code は1回しか使えない)では動かさない
+  const local = /^(localhost|127\.0\.0\.1|\[::1\]|)$/.test(location.hostname);   // ローカルの 'dev' は比べない。配信先で 'dev' なら古い版なので更新する
+  if (!cur || (cur === 'dev' && local) || /[?&](code|error)=/.test(location.search)) return;   // 認可の戻り(code は1回しか使えない)では動かさない
   try {
     const t = await (await fetch('build-info.js?nc=' + Date.now(), { cache: 'no-store' })).text();
     const m = t.match(/sha:\s*'([0-9a-f]+)'/);
