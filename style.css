@@ -14,6 +14,7 @@ body { font: 14px/1.4 system-ui, sans-serif; }
 }
 /* 長押しで入るコンパスモード (地図が端末の向きに回る)。-webkit-touch-callout: 長押しのメニューを出さない */
 #locate { -webkit-touch-callout: none; }
+#locate.follow { color: #60a5fa; }   /* 追従中 */
 #locate.on { background: #2563eb; color: #fff; }
 /* 画面左下のビルド表示 (gyazo-tycoon-viewer の #statbar と同じ役割)。右下は Leaflet の帰属表示 */
 #statbar {

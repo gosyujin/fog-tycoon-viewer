@@ -513,25 +513,37 @@ document.addEventListener('visibilitychange', () => {
 });
 // ---------- 追従 ----------
 // 追従中は現在地を画面の中心に保つ。縮尺は触らない (ズームは画面中心基準にして、拡大縮小しても現在地が中心から外れない)。
-// 地図をドラッグしたら追従をやめる (◎ で戻る)。ピンチは2本指なので除く。
-let follow = false, touching = 0, firstFollowZoom = false;
+// 地図を1本指でドラッグしたら追従をやめる (◎ で戻る)。ピンチは2本指なので外さない。
+// 追従中は ◎ の文字が青い (外れると灰色。コンパス中は ◎ 全体が青)。
+let follow = false, touching = 0, firstFollowZoom = false, dragCancel = 0;
 function setFollow(on) {
   follow = on;
   const z = on ? 'center' : true;
   map.options.touchZoom = map.options.scrollWheelZoom = map.options.doubleClickZoom = z;
+  $('locate').classList.toggle('follow', on);
 }
 (() => {
   const el = map.getContainer(), opt = { capture: true, passive: true };
-  const count = (e) => { touching = e.touches.length; if (!touching) followStep(); };   // 指を離したら、触っている間に動いた分の位置へ寄せる
+  const count = (e) => {
+    touching = e.touches.length;
+    // 指が揃う前の1本目の動きで dragstart が出て追従が外れていたら、2本指になった時点でピンチだったとみなして戻す
+    if (touching >= 2 && dragCancel && Date.now() - dragCancel < 1000) { setFollow(true); dragCancel = 0; }
+    if (!touching) setTimeout(() => followStep(true), 400);   // 離した後のズームの動き (アニメーション) が終わってから、触っている間に動いた分を寄せる
+  };
   for (const t of ['touchstart', 'touchend', 'touchcancel']) el.addEventListener(t, count, opt);
 })();
-map.on('dragstart', () => { if (touching < 2) setFollow(false); });
-map.on('zoomend', followStep);   // ピンチ終了のズームは操作前の中心へ寄るので、終わったら現在地へ戻す (止まっていると次の測位でも動かない)
-function followStep() {
+map.on('dragstart', () => { if (touching < 2 && follow) { setFollow(false); dragCancel = Date.now(); } });
+map.on('zoomend', () => followStep(true));   // ピンチ終了のズームは操作前の中心へ寄るので、終わったら現在地へ戻す
+// 見張り: 測位は止まっていると来ない (iOS は動かないと更新しない) ので、何かの拍子に中心がずれたら1秒以内に戻す
+setInterval(() => {
+  if (follow && lastPos && !touching && map.latLngToContainerPoint(lastPos).distanceTo(map.getSize().divideBy(2)) > 4) followStep(true);
+}, 1000);
+function followStep(instant) {
   if (!follow || !lastPos || touching) return false;   // 触っている間は動かさない (ピンチ・ドラッグと喧嘩する)
   const z = firstFollowZoom ? Math.max(map.getZoom(), 16) : map.getZoom();   // 追跡を始めて最初の1回だけ寄る。以降は縮尺に触れない
   firstFollowZoom = false;
-  map.setView(lastPos, z);   // move で霧も再描画される
+  // instant: アニメーションなしで寄せる (ズームのアニメーションと重ねない)。通常の測位ごとの追従はなめらかに動かす
+  map.setView(lastPos, z, instant === true ? { animate: false } : undefined);   // move で霧も再描画される
   return true;
 }
 function onLive(e) {
