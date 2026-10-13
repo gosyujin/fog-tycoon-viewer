@@ -50,9 +50,10 @@
   <div id="ciPos"></div>
   <div class="ci-row"><button type="button" id="ciHere">現在地</button><button type="button" id="ciPick">地図で指定</button></div>
   <div id="ciNear"></div>
-  <input id="ciName" list="ciPlaces" placeholder="場所の名前" enterkeyhint="done" autocapitalize="off" required>
+  <input id="ciWhere" list="ciPlaces" placeholder="どこ? (店・施設など)" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="done" autocapitalize="off" required>
   <datalist id="ciPlaces"></datalist>
   <label class="ci-time">時刻 <input id="ciTime" type="datetime-local"></label>
+  <details id="ciStays"><summary id="ciStaySum">この日の滞在から選ぶ</summary><div id="ciStayList"></div></details>
   <input id="ciNote" placeholder="メモ (任意)" enterkeyhint="done">
   <button type="submit" id="ciSave">チェックイン</button>
 </form>

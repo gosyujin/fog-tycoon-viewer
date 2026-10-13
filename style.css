@@ -117,10 +117,12 @@ body { font: 14px/1.4 system-ui, sans-serif; }
 .pin-pop .del { border: 0; background: none; color: #c00; cursor: pointer; font: inherit; padding: 2px 4px; }
 #rcList .rc-ci { color: #c4b5fd; opacity: 1; }
 
-/* チェックインのシート。キーボードで隠れないよう画面上に出し、右上の ⚙ ✅ は避ける */
+/* チェックインのシート。画面の下端に置き、ソフトキーボードが出たらその上へ (--kb: キーボードの高さ / --vvh: 見えている高さ。app.js の syncKeyboard が入れる) */
 #ciSheet {
-  position: absolute; z-index: 1002; left: 10px; right: 60px; max-width: 420px;
-  top: calc(10px + env(safe-area-inset-top)); display: grid; gap: 6px;
+  position: absolute; z-index: 1002; left: 10px; right: 10px; max-width: 420px;
+  bottom: calc(10px + max(var(--kb, 0px), env(safe-area-inset-bottom)));
+  max-height: calc(var(--vvh, 100vh) - 80px - env(safe-area-inset-top)); overflow-y: auto; overscroll-behavior: contain;
+  display: grid; gap: 6px;
   padding: 8px 10px; border-radius: 8px; background: rgba(20, 24, 33, .94); color: #eee; font-size: 13px;
 }
 #ciSheet[hidden] { display: none; }
@@ -138,3 +140,10 @@ body { font: 14px/1.4 system-ui, sans-serif; }
   bottom: calc(84px + env(safe-area-inset-bottom));
   font-size: 20px;
 }
+/* この日の滞在から選ぶ (時刻欄の日の候補) */
+#ciStays summary { cursor: pointer; padding: 2px 0; }
+#ciStayList { display: grid; gap: 2px; max-height: 26vh; overflow-y: auto; overscroll-behavior: contain; margin-top: 4px; }
+#ciStayList button { display: grid; text-align: left; border: 0; background: none; border-radius: 6px; padding: 5px 6px; color: inherit; cursor: pointer; }
+#ciStayList button.sel { background: rgba(56, 189, 248, .3); }
+#ciStayList button:disabled { opacity: .5; cursor: default; }
+#ciStayList span { font-size: 12px; opacity: .85; }

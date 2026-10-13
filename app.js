@@ -664,7 +664,25 @@ ciRemove = (id) => {
 let ciPos = null, ciPicking = false;
 const ciMark = L.layerGroup().addTo(map);
 const localInput = (ts) => new Date(ts * 1000 - tzSec() * 1000).toISOString().slice(0, 16);   // <input type=datetime-local> 用 (端末のローカル時刻)
+const placesAt = (lat, lon) => ci.places.map((p) => ({ p, d: map.distance([p.lat, p.lon], [lat, lon]) })).filter((x) => x.d <= CI_NEAR_M).sort((a, b) => a.d - b.d);   // 近い順 (CI_NEAR_M 以内)
 const placesNear = () => ci.places.map((p) => ({ p, d: map.distance([p.lat, p.lon], ciPos) })).sort((a, b) => a.d - b.d);
+
+// シートは画面の下端に置く。ソフトキーボードが出たら、見えている範囲 (visualViewport) の下端へ上げる。
+// iOS はキーボードでレイアウトの高さが変わらず visualViewport だけ縮むので、その差を --kb (キーボードの高さ)、見える高さを --vvh に入れる
+const vv = window.visualViewport;
+function syncKeyboard() {
+  if (!vv) return;
+  const root = document.documentElement.style;
+  root.setProperty('--kb', Math.max(0, window.innerHeight - vv.height - vv.offsetTop) + 'px');
+  root.setProperty('--vvh', vv.height + 'px');
+  ciReveal();
+}
+// 選んだ位置がシートやキーボードに隠れないよう、見える範囲に寄せる (シートの上端より下が隠れている)
+function ciReveal() {
+  if (!ciPos || $('ciSheet').hidden) return;
+  map.panInside(ciPos, { paddingTopLeft: [24, 70], paddingBottomRight: [24, window.innerHeight - $('ciSheet').getBoundingClientRect().top + 20] });
+}
+if (vv) { vv.addEventListener('resize', syncKeyboard); vv.addEventListener('scroll', syncKeyboard); syncKeyboard(); }
 
 function ciSetPos(lat, lon, label) {
   ciPos = L.latLng(lat, lon); ciPicking = false;
@@ -676,10 +694,11 @@ function ciSetPos(lat, lon, label) {
   chips.replaceChildren(); names.replaceChildren();
   for (const { p, d } of near.filter((x) => x.d <= CI_NEAR_M).slice(0, 5)) {
     const b = document.createElement('button');
-    b.type = 'button'; b.textContent = `${p.name} (${Math.round(d)}m)`; b.onclick = () => { $('ciName').value = p.name; };
+    b.type = 'button'; b.textContent = `${p.name} (${Math.round(d)}m)`; b.onclick = () => { $('ciWhere').value = p.name; };
     chips.append(b);
   }
   for (const n of new Set(near.map((x) => x.p.name))) { const o = document.createElement('option'); o.value = n; names.append(o); }
+  ciReveal();
 }
 
 function ciLocate() {
@@ -692,16 +711,92 @@ function ciLocate() {
   );
 }
 
+// ---- 滞在候補: 日を選ぶと、その日に「同じ所に STAY_MIN_SEC 以上いた」場所を点から探して並べる。入れ忘れの思い出し用 ----
+// 点は 10m 未満の移動を間引いてあるので、滞在中は点が少ない。最初の点から半径 STAY_R 内に続く点を1つの連なりとし、
+// 近くで STAY_MERGE_SEC 以内に戻った連なり (屋内の GPS のゆらぎ) はつなぐ。候補は保存せず、タップで位置・時刻を入れるだけ
+const STAY_R = 60, STAY_MIN_SEC = 10 * 60, STAY_MERGE_SEC = 15 * 60, STAY_DONE_M = 150, STAY_PAD_SEC = 15 * 60, STAY_SNAP_M = 100;
+const stayLayer = L.layerGroup().addTo(map);
+const dayStart = () => { const d = $('ciTime').value ? new Date($('ciTime').value.slice(0, 10) + 'T00:00') : new Date(); if (!$('ciTime').value) d.setHours(0, 0, 0, 0); return d.getTime() / 1000; };   // 時刻欄の日の0時 (端末の時刻)
+const dayPoints = (t0) => recallSource().filter((p) => p[0] >= t0 && p[0] < t0 + 86400);
+
+function stayCandidates(t0) {
+  const pts = dayPoints(t0);
+  if (!pts.length) return [];
+  const cosLat = Math.cos(pts[0][1] * Math.PI / 180), m = (lat1, lon1, lat2, lon2) => Math.hypot((lat1 - lat2) * 111000, (lon1 - lon2) * 111000 * cosLat);
+  const runs = [];
+  for (let i = 0; i < pts.length;) {
+    let j = i, sa = 0, so = 0;
+    while (j < pts.length && m(pts[j][1], pts[j][2], pts[i][1], pts[i][2]) <= STAY_R) { sa += pts[j][1]; so += pts[j][2]; j++; }
+    runs.push({ start: pts[i][0], end: pts[j - 1][0], lat: sa / (j - i), lon: so / (j - i) });
+    i = j;
+  }
+  const merged = [];
+  for (const r of runs) {
+    const last = merged[merged.length - 1];
+    if (last && r.start - last.end <= STAY_MERGE_SEC && m(r.lat, r.lon, last.lat, last.lon) <= STAY_R) last.end = r.end;
+    else merged.push({ ...r });
+  }
+  return merged.filter((s) => s.end - s.start >= STAY_MIN_SEC);
+}
+
+// 候補の前後 STAY_PAD_SEC 以内・STAY_DONE_M 以内にチェックインがあれば、その候補は済み
+const stayDone = (s) => ci.checkins.find((k) => {
+  const p = placeOf(k.place);
+  return k.t >= s.start - STAY_PAD_SEC && k.t <= s.end + STAY_PAD_SEC && map.distance(p ? [p.lat, p.lon] : [k.lat, k.lon], [s.lat, s.lon]) <= STAY_DONE_M;
+});
+
+function ciStays() {
+  const box = $('ciStayList');
+  box.replaceChildren(); stayLayer.clearLayers();
+  const cands = stayCandidates(dayStart());
+  let open = 0;
+  for (const s of cands) {
+    const done = stayDone(s), near = placesAt(s.lat, s.lon)[0];
+    const b = document.createElement('button'), a = document.createElement('b'), c = document.createElement('span');
+    b.type = 'button';
+    a.textContent = `${hm(s.start)}〜${hm(s.end)} (${mins(s.end - s.start)})`;
+    c.textContent = done ? `✓ ${placeOf(done.place)?.name ?? 'チェックイン済み'}` : near ? `「${near.p.name}」?` : '';
+    b.append(a); if (c.textContent) b.append(c);
+    if (done) b.disabled = true; else open++;
+    L.circleMarker([s.lat, s.lon], { pane: 'recall', renderer: recallRenderer, radius: 6, color: '#fff', weight: 2, fillColor: done ? '#94a3b8' : '#38bdf8', fillOpacity: 1, interactive: false }).addTo(stayLayer);
+    b.onclick = () => {
+      for (const x of box.children) x.classList.remove('sel');
+      b.classList.add('sel');
+      ciSetPos(s.lat, s.lon, `滞在候補 ${hm(s.start)}〜${hm(s.end)}`);
+      $('ciTime').value = localInput(s.start);
+      if (near) $('ciWhere').value = near.p.name;
+      $('ciStays').open = false;
+      map.setView([s.lat, s.lon], Math.max(map.getZoom(), 17));
+      ciReveal();
+      $(near ? 'ciSave' : 'ciWhere').focus({ preventScroll: true });
+    };
+    box.append(b);
+  }
+  $('ciStaySum').textContent = `この日の滞在から選ぶ (${cands.length ? `${open}件` : 'なし'})`;
+}
+$('ciTime').addEventListener('change', ciStays);
+
+// 地図で指定したとき、その日の点が近く (STAY_SNAP_M 以内) にあれば、いちばん近い点の時刻を入れる (時刻を打たなくてよい)
+function ciSnapTime(ll) {
+  let best = null, bd = STAY_SNAP_M;
+  for (const p of dayPoints(dayStart())) { const d = map.distance([p[1], p[2]], ll); if (d <= bd) { bd = d; best = p; } }
+  if (!best) return;
+  $('ciTime').value = localInput(best[0]);
+  $('ciPos').textContent += ` — この日 ${hm(best[0])} 頃にいました (時刻を合わせました)`;
+}
+
 function ciOpen() {
   setRecall(false);
   $('ciSheet').hidden = false;
-  $('ciName').value = ''; $('ciNote').value = ''; $('ciTime').value = localInput(Date.now() / 1000);
+  $('ciWhere').value = ''; $('ciNote').value = ''; $('ciTime').value = localInput(Date.now() / 1000);
   $('ciNear').replaceChildren(); ciMark.clearLayers(); ciPos = null;
+  $('ciStays').open = false;
+  ciStays();
   ciLocate();
-  $('ciName').focus({ preventScroll: true });
+  $('ciWhere').focus({ preventScroll: true });
 }
 function ciClose() {
-  $('ciSheet').hidden = true; ciPicking = false; $('ciPick').classList.remove('on'); ciMark.clearLayers(); ciPos = null;
+  $('ciSheet').hidden = true; stayLayer.clearLayers(); ciPicking = false; $('ciPick').classList.remove('on'); ciMark.clearLayers(); ciPos = null;
 }
 $('ciBtn').onclick = () => ($('ciSheet').hidden ? ciOpen() : ciClose());
 $('ciClose').onclick = ciClose;
@@ -711,12 +806,12 @@ $('ciPick').onclick = () => {
   ciPicking = !ciPicking; $('ciPick').classList.toggle('on', ciPicking);
   if (ciPicking) $('ciPos').textContent = '地図をタップして位置を指定してください';
 };
-map.on('click', (e) => { if (ciPicking) ciSetPos(e.latlng.lat, e.latlng.lng, '地図で指定'); });
+map.on('click', (e) => { if (ciPicking) { ciSetPos(e.latlng.lat, e.latlng.lng, '地図で指定'); ciSnapTime(e.latlng); } });
 
 $('ciSheet').onsubmit = (e) => {
   e.preventDefault();
-  const name = $('ciName').value.trim();
-  if (!name) { $('ciName').focus(); return; }
+  const name = $('ciWhere').value.trim();
+  if (!name) { $('ciWhere').focus(); return; }
   if (!ciPos) { toast('位置が決まっていません。現在地を取得するか、地図で指定してください'); return; }
   const t = $('ciTime').value ? Math.floor(new Date($('ciTime').value).getTime() / 1000) : Math.floor(Date.now() / 1000);
   if (!isFinite(t)) { toast('時刻を確認してください'); return; }
