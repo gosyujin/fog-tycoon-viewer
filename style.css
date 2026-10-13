@@ -6,7 +6,7 @@ body { font: 14px/1.4 system-ui, sans-serif; }
   display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
 }
 /* ダブルタップでページが拡大されるのを防ぐ。拡大縮小は地図(Leaflet)だけ */
-#ui, #ui *, #locate, #mode, #sync, #login, #login *, .leaflet-control, .leaflet-control * { touch-action: manipulation; }
+#ui, #ui *, #locate, #mode, #sync, #recallBtn, #pinBtn, #recall, #recall *, #ciSheet, #ciSheet *, #login, #login *, .leaflet-control, .leaflet-control * { touch-action: manipulation; }
 .fab, #panel button { -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none; }
 #locate {
   position: absolute; z-index: 1000; left: 50%; transform: translateX(-50%);   /* 画面中央 */
@@ -81,3 +81,58 @@ body { font: 14px/1.4 system-ui, sans-serif; }
 #login button { background: #2563eb; color: #fff; border: 0; }
 #login code { word-break: break-all; color: #9cf; }
 .err { color: #f88; min-height: 1.4em; margin: 0; }
+/* この辺りの履歴: 🕘 を押してから地図をタップすると、その周りに来た日の一覧が下から出る */
+#recallBtn {
+  position: absolute; z-index: 1000; left: 60px;
+  bottom: calc(34px + env(safe-area-inset-bottom));
+  font-size: 20px;
+}
+#recallBtn.on { background: #ea580c; color: #fff; }
+#recall {
+  position: absolute; z-index: 1001; left: 10px; right: 10px; max-width: 420px;
+  bottom: calc(90px + env(safe-area-inset-bottom)); max-height: 38vh; overflow-y: auto; overscroll-behavior: contain;
+  padding: 8px 10px; border-radius: 8px; background: rgba(20, 24, 33, .92); color: #eee; font-size: 13px;
+}
+#recall[hidden] { display: none; }
+#recall button { font: inherit; color: inherit; }
+.rc-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+#rcClose { border: 0; background: none; font-size: 20px; line-height: 1; padding: 2px 6px; cursor: pointer; }
+#rcRadii { display: flex; gap: 6px; margin: 6px 0; }
+#rcRadii button { border: 1px solid #556; background: none; border-radius: 12px; padding: 2px 10px; cursor: pointer; }
+#rcRadii button[aria-pressed=true] { background: #ea580c; border-color: #ea580c; color: #fff; }
+#rcList { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+#rcList button { display: grid; width: 100%; text-align: left; border: 0; background: none; border-radius: 6px; padding: 5px 6px; cursor: pointer; }
+#rcList button.sel { background: rgba(234, 88, 12, .35); }
+#rcList span { font-size: 12px; opacity: .8; }
+#rcList .more { padding: 4px 6px; font-size: 12px; opacity: .7; }
+
+/* チェックインのピン (霧/ヒートマップ・履歴と同じ高さの丸ボタンでオンオフ)。名前は寄ったときだけ (.pin-labels) */
+#pinBtn {
+  position: absolute; z-index: 1000; left: 110px;
+  bottom: calc(34px + env(safe-area-inset-bottom));
+  font-size: 20px;
+}
+#pinBtn.on { background: #7c3aed; color: #fff; }
+.pin-label { display: none; background: rgba(20, 24, 33, .88); color: #eee; border: 0; box-shadow: none; font-size: 12px; padding: 1px 6px; }
+.pin-label::before { display: none; }
+.pin-labels .pin-label { display: block; }
+.pin-pop ul { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 3px; font-size: 12px; }
+.pin-pop li { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.pin-pop .del { border: 0; background: none; color: #c00; cursor: pointer; font: inherit; padding: 2px 4px; }
+#rcList .rc-ci { color: #c4b5fd; opacity: 1; }
+
+/* チェックインのシート。キーボードで隠れないよう画面上に出し、右上の ⚙ ✅ は避ける */
+#ciSheet {
+  position: absolute; z-index: 1002; left: 10px; right: 60px; max-width: 420px;
+  top: calc(10px + env(safe-area-inset-top)); display: grid; gap: 6px;
+  padding: 8px 10px; border-radius: 8px; background: rgba(20, 24, 33, .94); color: #eee; font-size: 13px;
+}
+#ciSheet[hidden] { display: none; }
+#ciSheet button, #ciSheet input { font: inherit; }
+#ciSheet input { box-sizing: border-box; width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #445; background: #161a24; color: #eee; font-size: 16px; }   /* 16px: iOS が入力でページを拡大しない */
+#ciPos { font-size: 12px; opacity: .85; min-height: 1.4em; }
+.ci-row, #ciNear { display: flex; flex-wrap: wrap; gap: 6px; }
+#ciSheet .ci-row button, #ciNear button { border: 1px solid #556; background: none; color: inherit; border-radius: 12px; padding: 3px 10px; cursor: pointer; }
+#ciPick.on { background: #ea580c; border-color: #ea580c; }
+.ci-time { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+#ciSave { border: 0; border-radius: 6px; padding: 9px; background: #2563eb; color: #fff; cursor: pointer; }

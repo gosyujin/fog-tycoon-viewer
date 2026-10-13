@@ -13,6 +13,7 @@
 
 <div id="ui" hidden>
   <button id="gear" class="fab" type="button" aria-label="設定" aria-expanded="false" aria-controls="panel">⚙</button>
+  <button id="ciBtn" class="fab" type="button" aria-label="チェックイン" hidden>✅</button>
   <div id="panel" hidden>
     <strong>Fog Tycoon</strong>
     <div id="stats">読み込み中…</div>
@@ -44,14 +45,34 @@
 </div>
 <button id="sync" class="fab" type="button" aria-label="Dawarich と同期" hidden>🔄</button>
 <div id="toast" role="status" hidden></div>
+<form id="ciSheet" hidden autocomplete="off">
+  <div class="rc-head"><strong>チェックイン</strong><button id="ciClose" type="button" aria-label="閉じる">×</button></div>
+  <div id="ciPos"></div>
+  <div class="ci-row"><button type="button" id="ciHere">現在地</button><button type="button" id="ciPick">地図で指定</button></div>
+  <div id="ciNear"></div>
+  <input id="ciName" list="ciPlaces" placeholder="場所の名前" enterkeyhint="done" autocapitalize="off" required>
+  <datalist id="ciPlaces"></datalist>
+  <label class="ci-time">時刻 <input id="ciTime" type="datetime-local"></label>
+  <input id="ciNote" placeholder="メモ (任意)" enterkeyhint="done">
+  <button type="submit" id="ciSave">チェックイン</button>
+</form>
 <button id="mode" class="fab" type="button" aria-pressed="false" aria-label="霧 (押すとヒートマップ)" hidden>🌫</button>
+<button id="recallBtn" class="fab" type="button" aria-pressed="false" aria-label="この辺りの履歴 (押してから地図をタップ)" hidden>🕘</button>
+<button id="pinBtn" class="fab" type="button" aria-pressed="true" aria-label="チェックインのピンを出す/隠す" hidden>📍</button>
+<div id="recall" hidden>
+  <div class="rc-head"><strong id="rcTitle"></strong><button id="rcClose" type="button" aria-label="閉じる">×</button></div>
+  <div id="rcRadii" role="group" aria-label="半径">
+    <button type="button" data-r="50">50m</button><button type="button" data-r="100">100m</button><button type="button" data-r="200">200m</button><button type="button" data-r="500">500m</button>
+  </div>
+  <ul id="rcList"></ul>
+</div>
 <button id="live" class="fab" type="button" aria-label="現在地を追跡" aria-pressed="false" hidden>●</button>
 <button id="locate" class="fab" type="button" aria-label="現在地 (長押しでコンパス)" aria-pressed="false" hidden>◎</button>
 
 <div id="login" hidden>
   <div class="card">
     <strong>Fog Tycoon</strong>
-    <p>Dropbox アプリの App key を入力して認可します。この端末の localStorage にだけ保存し、読み取り権限のみ要求します。</p>
+    <p>Dropbox アプリの App key を入力して認可します。この端末の localStorage にだけ保存します。要求する権限は、アプリ専用フォルダ (App Folder) の中の読み書きだけです (読み: 軌跡データ / 書き: チェックイン)。</p>
     <p>このページの URL <code id="redir"></code> を、Dropbox アプリの Redirect URIs に登録してください。</p>
     <input id="key" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="App key">
     <button id="loginBtn" type="button">Dropbox で認可する</button>

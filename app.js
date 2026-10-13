@@ -1,7 +1,7 @@
 // fog-tycoon の外出先ビューア。コード・鍵・データは含まない。
-// Dropbox(App Folder) の /points.json を、端末で認可(PKCE・files.content.read のみ)して読む。
+// Dropbox(App Folder) の /points.json を読み、/checkins.json を読み書きする。端末で認可する (PKCE・files.content.read / write)。
 // points.json: { generated, points: [[epochSec, lat, lon], ...] } (時刻昇順)
-const SCOPE = 'files.content.read';
+const SCOPE = 'files.content.read files.content.write';   // write: チェックインを /checkins.json に書く
 const DATA_PATH = '/points.json';
 const REDIR = location.origin + location.pathname;
 const GAP_SEC = 30 * 60;   // この時間以上空いたら軌跡を分割
@@ -250,18 +250,24 @@ const Fog = L.Layer.extend({
 });
 const fog = new Fog();
 
-function drawTracks() {
-  tracksLayer.clearLayers();
+// 点列を、時間か距離が空いたところで分けた線分 (緯度経度の配列) のリストにする
+function trackSegments(pts) {
+  const segs = [];
   let seg = [], prev = null;
-  const flush = () => {
-    if (seg.length > 1) L.polyline(seg, { color: '#4fc3f7', weight: 2, opacity: 0.7, interactive: false }).addTo(tracksLayer);
-    seg = [];
-  };
-  for (const [ts, lat, lon] of points) {
-    if (prev && (ts - prev[0] > GAP_SEC || map.distance([prev[1], prev[2]], [lat, lon]) > GAP_M)) flush();
+  for (const [ts, lat, lon] of pts) {
+    if (prev && (ts - prev[0] > GAP_SEC || map.distance([prev[1], prev[2]], [lat, lon]) > GAP_M)) {
+      if (seg.length > 1) segs.push(seg);
+      seg = [];
+    }
     seg.push([lat, lon]); prev = [ts, lat, lon];
   }
-  flush();
+  if (seg.length > 1) segs.push(seg);
+  return segs;
+}
+
+function drawTracks() {
+  tracksLayer.clearLayers();
+  for (const seg of trackSegments(points)) L.polyline(seg, { color: '#4fc3f7', weight: 2, opacity: 0.7, interactive: false }).addTo(tracksLayer);
 }
 
 let note = '', fitted = false;
@@ -386,6 +392,345 @@ function setMode(m) {
   if (map.hasLayer(fog)) fog.redraw();   // 起動時はまだ地図に載っていない
 }
 $('mode').onclick = () => { setMode(mode === 'heat' ? 'fog' : 'heat'); LS.set('fog_mode', mode); };
+
+const recallSource = () => all.concat(live);   // 履歴の元になる点
+
+// ---- この辺りの履歴: 🕘 を押してから地図をタップすると、その周り (半径 recallR) に来た日を新しい順に出す ----
+// 半径内の点の連なりを1回の「訪問」とし、日ごとにまとめる (日をまたぐ連なりは日で分ける)。
+// 点は 10m 未満の移動を間引いてあるので、滞在中は点が少ない。時刻は「最初の点〜最後の点」の目安
+const RECALL_MAX_DAYS = 60;   // 一覧に出す日数の上限 (新しい順)
+const RECALL_MERGE_SEC = 15 * 60;   // 半径の外に出て、この時間以内に戻った分は同じ訪問にまとめる
+let recallOn = false, recallR = 100, recallAt = null, recallDay = null;
+map.createPane('recall').style.zIndex = 450;   // 霧 (overlayPane=400) より上、マーカー (600) より下
+const recallRenderer = L.canvas({ pane: 'recall' });
+const recallLayer = L.layerGroup().addTo(map), dayLayer = L.layerGroup().addTo(map);
+const tzSec = () => new Date().getTimezoneOffset() * 60;
+const hm = (ts) => new Date(ts * 1000).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+const mins = (s) => { const m = Math.floor(s / 60); return m < 60 ? `${m}分` : `${Math.floor(m / 60)}時間${m % 60}分`; };
+
+function recallVisits(c, r) {
+  const tz = tzSec(), cosLat = Math.cos(c.lat * Math.PI / 180), r2 = r * r, days = new Map();
+  let outside = false;   // 直前の半径内の点から、半径の外の点を挟んだか
+  for (const [ts, lat, lon] of recallSource()) {
+    const dy = (lat - c.lat) * 111000, dx = (lon - c.lng) * 111000 * cosLat;
+    if (dx * dx + dy * dy > r2) { outside = true; continue; }
+    const day = Math.floor((ts - tz) / 86400);
+    if (!days.has(day)) days.set(day, []);
+    const v = days.get(day), last = v[v.length - 1];
+    // 外を挟まない連なりは、間が空いていても同じ訪問 (滞在中は点が間引かれる)。外を挟んでも RECALL_MERGE_SEC 以内なら同じ訪問 (半径の縁での GPS のゆらぎ)
+    if (last && (!outside || ts - last.end <= RECALL_MERGE_SEC)) last.end = ts;
+    else v.push({ start: ts, end: ts });
+    outside = false;
+  }
+  return [...days.entries()].sort((a, b) => b[0] - a[0]);   // [[日番号, [訪問…]], …] 新しい日が先
+}
+
+function clearDay() { recallDay = null; dayLayer.clearLayers(); for (const b of document.querySelectorAll('#rcList .sel')) b.classList.remove('sel'); }
+
+// その日の軌跡を橙で重ねて、全体が見えるように寄せる。同じ行をもう一度押すと消える
+function showDay(day, btn) {
+  const wasSel = recallDay === day;
+  clearDay();
+  if (wasSel) return;
+  recallDay = day; btn.classList.add('sel');
+  const tz = tzSec(), pts = recallSource().filter((p) => Math.floor((p[0] - tz) / 86400) === day);
+  if (!pts.length) return;
+  const o = { pane: 'recall', renderer: recallRenderer, interactive: false };
+  for (const s of trackSegments(pts)) L.polyline(s, { ...o, color: '#f97316', weight: 4, opacity: 0.9 }).addTo(dayLayer);
+  const dot = (p, color) => L.circleMarker([p[1], p[2]], { ...o, radius: 6, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1 }).addTo(dayLayer);
+  dot(pts[0], '#16a34a'); dot(pts[pts.length - 1], '#dc2626');   // 緑=その日の最初の点 / 赤=最後の点
+  map.fitBounds(L.latLngBounds(pts.map((p) => [p[1], p[2]])), { maxZoom: 17, paddingTopLeft: [24, 60], paddingBottomRight: [24, $('recall').offsetHeight + 110] });
+}
+
+function recallShow(latlng) {
+  recallAt = latlng; clearDay(); recallLayer.clearLayers();
+  L.circle(latlng, { radius: recallR, color: '#f97316', weight: 2, fillOpacity: 0.08, interactive: false, pane: 'recall', renderer: recallRenderer }).addTo(recallLayer);
+  // 点の訪問がある日に、半径内のチェックインがある日 (点が無い日も) を加える
+  const days = new Map(recallVisits(latlng, recallR)), cis = recallCheckins(latlng, recallR), list = $('rcList');
+  for (const day of cis.keys()) if (!days.has(day)) days.set(day, []);
+  const rows = [...days.entries()].sort((a, b) => b[0] - a[0]);
+  const n = rows.reduce((s, [, v]) => s + v.length, 0), nc = [...cis.values()].reduce((s, v) => s + v.length, 0);
+  $('rcTitle').textContent = rows.length ? `半径${recallR}m 以内: ${rows.length}日 / ${n}回${nc ? ` / 📍${nc}件` : ''}` : `半径${recallR}m 以内に来た記録はありません`;
+  list.replaceChildren();
+  for (const [day, visits] of rows.slice(0, RECALL_MAX_DAYS)) {
+    const li = document.createElement('li'), btn = document.createElement('button'), d = document.createElement('b'), names = cis.get(day) || [];
+    btn.type = 'button';
+    d.textContent = dayText(visits.length ? visits[0].start : names[0].t);
+    btn.append(d);
+    if (visits.length) {
+      const t = document.createElement('span');
+      t.textContent = visits.map((v) => (v.end - v.start < 60 ? hm(v.start) : `${hm(v.start)}〜${hm(v.end)}${v.end - v.start >= 300 ? ` (${mins(v.end - v.start)})` : ''}`)).join('、');
+      btn.append(t);
+    }
+    if (names.length) {
+      const c = document.createElement('span');
+      c.className = 'rc-ci';
+      c.textContent = names.map((k) => `📍${placeOf(k.place)?.name ?? ''}${k.note ? `「${k.note}」` : ''}`).join(' ');
+      btn.append(c);
+    }
+    btn.onclick = () => showDay(day, btn);
+    li.append(btn); list.append(li);
+  }
+  map.panInside(latlng, { paddingTopLeft: [24, 60], paddingBottomRight: [24, $('recall').offsetHeight + 110] });   // タップした所が一覧に隠れないように寄せる
+  if (rows.length > RECALL_MAX_DAYS) { const li = document.createElement('li'); li.className = 'more'; li.textContent = `ほか ${rows.length - RECALL_MAX_DAYS} 日 (古い順)`; list.append(li); }
+}
+
+function setRecall(on) {
+  recallOn = on;
+  $('recallBtn').classList.toggle('on', on);
+  $('recallBtn').setAttribute('aria-pressed', on);
+  $('recall').hidden = !on;
+  recallLayer.clearLayers(); clearDay(); recallAt = null;
+  $('rcList').replaceChildren();
+  $('rcTitle').textContent = '地図をタップすると、その周りに来た日を出します';
+}
+$('recallBtn').onclick = () => setRecall(!recallOn);
+$('rcClose').onclick = () => setRecall(false);
+for (const b of $('rcRadii').children) {
+  b.setAttribute('aria-pressed', +b.dataset.r === recallR);
+  b.onclick = () => {
+    recallR = +b.dataset.r;
+    for (const x of $('rcRadii').children) x.setAttribute('aria-pressed', x === b);
+    if (recallAt) recallShow(recallAt);
+  };
+}
+map.on('click', (e) => { if (recallOn) recallShow(e.latlng); });
+
+// ---- チェックイン (表示): { places: [{id, name, lat, lon}], checkins: [{id, t, place, lat, lon, note}] } ----
+// 場所 (places) は名前と代表座標。チェックインは「いつ、どの場所に」。viewer が Dropbox の /checkins.json に書き、本体は data/checkins.json を読むだけ。
+let ci = { places: [], checkins: [] }, ciRemove = null;   // ciRemove: 削除できる viewer だけが関数を入れる
+const placeOf = (id) => ci.places.find((p) => p.id === id);
+const pinPref = {
+  get() { try { return localStorage.getItem('fog_pins'); } catch { return null; } },
+  set(v) { try { localStorage.setItem('fog_pins', v); } catch {} },
+};
+map.createPane('pins').style.zIndex = 460;   // 履歴の円・軌跡 (450) より上
+const pinRenderer = L.canvas({ pane: 'pins', tolerance: 10 });   // 指で押しやすいよう当たりを広げる
+const pinLayer = L.layerGroup();
+const dayText = (ts) => new Date(ts * 1000).toLocaleDateString('ja-JP', { year: 'numeric', month: 'numeric', day: 'numeric', weekday: 'short' });
+
+function pinPopup(p, list) {
+  const box = document.createElement('div'), head = document.createElement('strong'), ul = document.createElement('ul');
+  box.className = 'pin-pop'; head.textContent = `${p.name} (${list.length}回)`;
+  for (const k of list.slice(0, 12)) {
+    const li = document.createElement('li'), s = document.createElement('span');
+    s.textContent = `${dayText(k.t)} ${hm(k.t)}${k.note ? ` ${k.note}` : ''}`;
+    li.append(s);
+    if (ciRemove) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'del'; b.textContent = '削除'; b.onclick = () => { map.closePopup(); ciRemove(k.id); };
+      li.append(b);
+    }
+    ul.append(li);
+  }
+  if (list.length > 12) { const li = document.createElement('li'); li.textContent = `ほか ${list.length - 12} 回`; ul.append(li); }
+  box.append(head, ul);
+  return box;
+}
+
+function drawPins() {
+  pinLayer.clearLayers();
+  const byPlace = new Map();
+  for (const k of ci.checkins) { if (!byPlace.has(k.place)) byPlace.set(k.place, []); byPlace.get(k.place).push(k); }
+  for (const p of ci.places) {
+    const list = byPlace.get(p.id);
+    if (!list) continue;   // チェックインが全部消えた場所は出さない
+    list.sort((a, b) => b.t - a.t);
+    const m = L.circleMarker([p.lat, p.lon], { pane: 'pins', renderer: pinRenderer, radius: 8, color: '#fff', weight: 2, fillColor: '#7c3aed', fillOpacity: 1, bubblingMouseEvents: false });
+    m.bindTooltip(p.name, { permanent: true, direction: 'right', offset: [8, 0], className: 'pin-label' });
+    m.on('click', () => L.popup({ maxWidth: 280 }).setLatLng([p.lat, p.lon]).setContent(pinPopup(p, list)).openOn(map));
+    m.addTo(pinLayer);
+  }
+}
+function setCheckins(d) { ci = { places: d.places || [], checkins: d.checkins || [] }; drawPins(); }
+
+function setPins(on) {
+  on ? pinLayer.addTo(map) : map.removeLayer(pinLayer);
+  $('pinBtn').classList.toggle('on', on);
+  $('pinBtn').setAttribute('aria-pressed', on);
+  pinPref.set(on ? '1' : '0');
+}
+$('pinBtn').onclick = () => setPins(!map.hasLayer(pinLayer));
+setPins(pinPref.get() !== '0');
+const syncPinLabels = () => map.getContainer().classList.toggle('pin-labels', map.getZoom() >= 15);   // 名前は寄ったときだけ (引きだと重なる)
+map.on('zoomend', syncPinLabels); syncPinLabels();
+
+// 半径内のチェックイン: 日番号 → [チェックイン]
+function recallCheckins(c, r) {
+  const tz = tzSec(), m = new Map();
+  for (const k of ci.checkins) {
+    const p = placeOf(k.place);
+    if (map.distance(p ? [p.lat, p.lon] : [k.lat, k.lon], c) > r) continue;
+    const day = Math.floor((k.t - tz) / 86400);
+    if (!m.has(day)) m.set(day, []);
+    m.get(day).push(k);
+  }
+  return m;
+}
+
+// ---- チェックイン (記録): Dropbox の /checkins.json に書く (viewer だけ) ----
+// 操作 (ops) をいったん端末のキューに積み、通信できるとき Dropbox の最新を読み直して適用し、rev つきで書き戻す。
+// 圏外でも押せる。他の端末が先に書いていたら (競合) 読み直してやり直す。ops: { op: 'add', checkin, place|null } / { op: 'del', id }
+const CI_PATH = '/checkins.json', CI_QUEUE = 'fog_ci_queue', CI_CACHE = 'fog_ci_cache', CI_NEAR_M = 100, CI_SAME_M = 300;
+let ciBase = { places: [], checkins: [] }, ciQueue = [], ciBusy = false;   // ciBase: Dropbox にある最後に読めた内容
+try { ciQueue = JSON.parse(LS.get(CI_QUEUE) || '[]') || []; } catch {}
+const ciSaveQueue = () => LS.set(CI_QUEUE, ciQueue.length ? JSON.stringify(ciQueue) : null);
+
+function ciApply(d, ops) {
+  const places = d.places.slice(), checkins = d.checkins.slice();
+  for (const o of ops) {
+    if (o.op === 'add') {
+      if (o.place && !places.some((p) => p.id === o.place.id)) places.push(o.place);
+      if (!checkins.some((c) => c.id === o.checkin.id)) checkins.push(o.checkin);
+    } else if (o.op === 'del') {
+      const i = checkins.findIndex((c) => c.id === o.id);
+      if (i >= 0) checkins.splice(i, 1);
+    }
+  }
+  return { places, checkins };
+}
+const ciRefresh = () => setCheckins(ciApply(ciBase, ciQueue));
+
+async function ciFetch() {
+  const r = await fetch('https://content.dropboxapi.com/2/files/download', {
+    method: 'POST', headers: { Authorization: 'Bearer ' + await token(), 'Dropbox-API-Arg': JSON.stringify({ path: CI_PATH }) },
+  });
+  if (r.status === 409) {
+    const t = await r.text();
+    if (t.includes('not_found')) return { data: { places: [], checkins: [] }, rev: null, exists: false };
+    throw new Error('download 409 ' + t.slice(0, 120));
+  }
+  if (!r.ok) throw new Error('download ' + r.status + ' ' + (await r.text()).slice(0, 120));
+  let rev = null;
+  try { rev = JSON.parse(r.headers.get('dropbox-api-result')).rev; } catch {}
+  const d = JSON.parse(await r.text());
+  return { data: { places: d.places || [], checkins: d.checkins || [] }, rev, exists: true };
+}
+
+async function ciUpload(data, { rev, exists }) {
+  const mode = !exists ? { '.tag': 'add' } : rev ? { '.tag': 'update', update: rev } : { '.tag': 'overwrite' };   // rev を読めなかったときだけ上書き
+  const r = await fetch('https://content.dropboxapi.com/2/files/upload', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + await token(), 'Content-Type': 'application/octet-stream', 'Dropbox-API-Arg': JSON.stringify({ path: CI_PATH, mode, autorename: false, mute: true }) },
+    body: JSON.stringify({ updated: Date.now(), ...data }),
+  });
+  if (r.ok) return;
+  const t = await r.text(), e = new Error('upload ' + r.status + ' ' + t.slice(0, 120));
+  e.conflict = /path\/conflict|"conflict"/.test(t);
+  e.scope = t.includes('missing_scope');
+  throw e;
+}
+
+async function ciReload() {
+  try {
+    const { data } = await ciFetch();
+    ciBase = data; LS.set(CI_CACHE, JSON.stringify(data)); ciRefresh();
+  } catch {}   // 圏外など。端末の控えを出したまま
+}
+
+async function ciFlush(loud) {
+  if (ciBusy || !ciQueue.length) return;
+  ciBusy = true;
+  try {
+    for (let i = 0; i < 4; i++) {
+      const sent = ciQueue.length, cur = await ciFetch(), merged = ciApply(cur.data, ciQueue.slice(0, sent));
+      try { await ciUpload(merged, cur); } catch (e) { if (e.conflict) continue; throw e; }
+      ciBase = merged; ciQueue = ciQueue.slice(sent); ciSaveQueue(); LS.set(CI_CACHE, JSON.stringify(ciBase)); ciRefresh();
+      if (loud) toast('チェックインを Dropbox に保存しました');
+      return;
+    }
+    throw new Error('他の端末の書き込みと競合が続きました');
+  } catch (e) {
+    if (/missing_scope/.test(e.message) || e.scope) toast('チェックインの保存には書き込み権限が要ります。⚙ の「Dropbox の認可を解除」から、認可し直してください (保存済みの分は端末に残ります)', 9000);
+    else if (loud) toast(e instanceof TypeError ? 'チェックインを端末に保存しました。通信できたときに送ります' : 'チェックインを端末に保存しました。送信に失敗: ' + e.message.slice(0, 80), 6000);
+  } finally { ciBusy = false; }
+}
+const ciSync = (loud) => (ciQueue.length ? ciFlush(loud) : ciReload());
+
+function ciStart() {
+  try { const c = JSON.parse(LS.get(CI_CACHE) || 'null'); if (c) ciBase = { places: c.places || [], checkins: c.checkins || [] }; } catch {}
+  ciRefresh();
+  ciSync(false);
+}
+addEventListener('online', () => ciSync(false));
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') ciSync(false); });
+
+ciRemove = (id) => {
+  if (!confirm('このチェックインを削除しますか?')) return;
+  ciQueue.push({ op: 'del', id }); ciSaveQueue(); ciRefresh(); ciFlush(true);
+};
+
+// ---- チェックインのシート: 位置 (現在地 / 地図をタップ) と名前・時刻・メモ ----
+let ciPos = null, ciPicking = false;
+const ciMark = L.layerGroup().addTo(map);
+const localInput = (ts) => new Date(ts * 1000 - tzSec() * 1000).toISOString().slice(0, 16);   // <input type=datetime-local> 用 (端末のローカル時刻)
+const placesNear = () => ci.places.map((p) => ({ p, d: map.distance([p.lat, p.lon], ciPos) })).sort((a, b) => a.d - b.d);
+
+function ciSetPos(lat, lon, label) {
+  ciPos = L.latLng(lat, lon); ciPicking = false;
+  $('ciPick').classList.remove('on');
+  $('ciPos').textContent = `📍 ${label}`;
+  ciMark.clearLayers();
+  L.circleMarker(ciPos, { pane: 'recall', renderer: recallRenderer, radius: 8, color: '#fff', weight: 2, fillColor: '#facc15', fillOpacity: 1, interactive: false }).addTo(ciMark);
+  const near = placesNear(), chips = $('ciNear'), names = $('ciPlaces');
+  chips.replaceChildren(); names.replaceChildren();
+  for (const { p, d } of near.filter((x) => x.d <= CI_NEAR_M).slice(0, 5)) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = `${p.name} (${Math.round(d)}m)`; b.onclick = () => { $('ciName').value = p.name; };
+    chips.append(b);
+  }
+  for (const n of new Set(near.map((x) => x.p.name))) { const o = document.createElement('option'); o.value = n; names.append(o); }
+}
+
+function ciLocate() {
+  $('ciPos').textContent = '現在地を取得中…';
+  if (!navigator.geolocation) { $('ciPos').textContent = 'この端末では現在地が使えません。「地図で指定」を使ってください'; return; }
+  navigator.geolocation.getCurrentPosition(
+    (p) => ciSetPos(p.coords.latitude, p.coords.longitude, `現在地 (精度 ±${Math.round(p.coords.accuracy)}m)`),
+    () => { $('ciPos').textContent = '現在地を取得できません。「地図で指定」を使ってください'; },
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 20000 },
+  );
+}
+
+function ciOpen() {
+  setRecall(false);
+  $('ciSheet').hidden = false;
+  $('ciName').value = ''; $('ciNote').value = ''; $('ciTime').value = localInput(Date.now() / 1000);
+  $('ciNear').replaceChildren(); ciMark.clearLayers(); ciPos = null;
+  ciLocate();
+  $('ciName').focus({ preventScroll: true });
+}
+function ciClose() {
+  $('ciSheet').hidden = true; ciPicking = false; $('ciPick').classList.remove('on'); ciMark.clearLayers(); ciPos = null;
+}
+$('ciBtn').onclick = () => ($('ciSheet').hidden ? ciOpen() : ciClose());
+$('ciClose').onclick = ciClose;
+$('recallBtn').addEventListener('click', ciClose);
+$('ciHere').onclick = ciLocate;
+$('ciPick').onclick = () => {
+  ciPicking = !ciPicking; $('ciPick').classList.toggle('on', ciPicking);
+  if (ciPicking) $('ciPos').textContent = '地図をタップして位置を指定してください';
+};
+map.on('click', (e) => { if (ciPicking) ciSetPos(e.latlng.lat, e.latlng.lng, '地図で指定'); });
+
+$('ciSheet').onsubmit = (e) => {
+  e.preventDefault();
+  const name = $('ciName').value.trim();
+  if (!name) { $('ciName').focus(); return; }
+  if (!ciPos) { toast('位置が決まっていません。現在地を取得するか、地図で指定してください'); return; }
+  const t = $('ciTime').value ? Math.floor(new Date($('ciTime').value).getTime() / 1000) : Math.floor(Date.now() / 1000);
+  if (!isFinite(t)) { toast('時刻を確認してください'); return; }
+  // 同じ名前の場所が近く (CI_SAME_M 以内) にあればそれに付ける。無ければ新しい場所を作る (代表座標はこの位置)
+  const same = placesNear().find((x) => x.p.name === name && x.d <= CI_SAME_M);
+  const place = same ? null : { id: 'p' + Date.now().toString(36) + rand(3), name, lat: +ciPos.lat.toFixed(5), lon: +ciPos.lng.toFixed(5) };
+  const checkin = { id: 'c' + Date.now().toString(36) + rand(3), t, place: same ? same.p.id : place.id, lat: +ciPos.lat.toFixed(5), lon: +ciPos.lng.toFixed(5) };
+  const note = $('ciNote').value.trim();
+  if (note) checkin.note = note;
+  ciQueue.push({ op: 'add', checkin, place }); ciSaveQueue(); ciRefresh();
+  ciClose();
+  toast(`${name} にチェックインしました`);
+  ciFlush(true);
+};
 // ---------- Dawarich との同期 ----------
 // Tailscale につながった Mac の同期サーバ (fog-tycoon の scripts/sync-server.mjs を tailscale serve で HTTPS 公開したもの) に依頼し、
 // Mac が Dawarich の最新データを Dropbox に書き出したら、読み直して最新の軌跡にする。URL はこの端末の localStorage だけに保存する。
@@ -717,8 +1062,12 @@ if ('serviceWorker' in navigator) addEventListener('load', () => navigator.servi
   $('locate').hidden = false;
   $('live').hidden = false;
   $('mode').hidden = false;
+  $('recallBtn').hidden = false;
+  $('pinBtn').hidden = false;
+  $('ciBtn').hidden = false;
   $('sync').hidden = false;
   setMode(LS.get('fog_mode') === 'heat' ? 'heat' : 'fog');
   initialView();
   load();
+  ciStart();
 })();
