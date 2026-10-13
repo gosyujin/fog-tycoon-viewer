@@ -20,6 +20,7 @@ fog-tycoon の外出先用ビューア(静的ページ)。GitHub Pages に置く
 - ボタン類はダブルタップでページが拡大しない(`touch-action: manipulation`。拡大縮小は地図だけ)
 - 画面左下に `build <sha> (<時刻>)` を表示。起動時に最新のデプロイと比べ、古ければ読み直す(GitHub Actions が `build-info.js` を上書き。ローカルは `dev`)
 - 地図タイルを端末にキャッシュ(`sw.js`。見たタイルだけを最大3000枚・14日間保存し、2回目以降は通信せずに表示。オフラインでも見たことのある場所は出る)。初期表示は前回の位置から始め、東京や日本全体を経由しない
+- ⚙ の「Dawarich と同期」: Tailscale につながった Mac の同期サーバ(fog-tycoon の `scripts/sync-server.mjs`)に依頼し、Mac が Dawarich の最新データを書き出したら読み直して最新の軌跡にする。同期先の URL(Mac の `tailscale serve` の `https://…ts.net`)は ⚙ に入力し、この端末にだけ保存する
 - 通信できないときは端末に残した控えを表示
 
 ## 注意

@@ -378,6 +378,33 @@ function setMode(m) {
   if (map.hasLayer(fog)) fog.redraw();   // 起動時はまだ地図に載っていない
 }
 $('mode').onclick = () => { setMode(mode === 'heat' ? 'fog' : 'heat'); LS.set('fog_mode', mode); };
+// ---------- Dawarich との同期 ----------
+// Tailscale につながった Mac の同期サーバ (fog-tycoon の scripts/sync-server.mjs を tailscale serve で HTTPS 公開したもの) に依頼し、
+// Mac が Dawarich の最新データを Dropbox に書き出したら、読み直して最新の軌跡にする。URL はこの端末の localStorage だけに保存する。
+const SYNC_TIMEOUT_MS = 60000;
+$('syncurl').value = LS.get('fog_sync_url') || '';
+$('syncurl').onchange = () => LS.set('fog_sync_url', $('syncurl').value.trim().replace(/\/+$/, '') || null);
+$('sync').onclick = async () => {
+  const base = $('syncurl').value.trim().replace(/\/+$/, '');
+  if (!base) { $('stats').textContent = '同期先の URL を入力してください (Mac の tailscale serve の https://…ts.net)'; return; }
+  LS.set('fog_sync_url', base);
+  const btn = $('sync'), label = btn.textContent, ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), SYNC_TIMEOUT_MS);
+  btn.disabled = true; btn.textContent = '同期中…'; $('stats').textContent = 'Dawarich と同期しています…';
+  try {
+    const r = await fetch(base + '/sync', { method: 'POST', headers: { 'x-fog-sync': '1' }, signal: ctl.signal });
+    const d = await r.json().catch(() => ({}));
+    if (r.status === 403) throw new Error('拒否されました (この URL のページから開いていますか?)');
+    if (!r.ok || !d.ok) throw new Error('同期に失敗しました: ' + (d.detail ? d.detail.split('\n').pop() : d.error || r.status));
+    await load();
+    $('stats').textContent += ' · 同期しました';
+  } catch (err) {
+    $('stats').textContent = err.name === 'AbortError' ? '同期がタイムアウトしました。もう一度試してください'
+      : err instanceof TypeError ? '同期サーバに届きません。Tailscale に接続しているか、URL を確認してください'
+      : err.message;
+  } finally {
+    clearTimeout(timer); btn.disabled = false; btn.textContent = label;
+  }
+};
 $('reload').onclick = load;
 $('logout').onclick = () => {
   if (!confirm('この端末の Dropbox 認可と控えを削除しますか?')) return;
