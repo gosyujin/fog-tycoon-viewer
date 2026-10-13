@@ -147,3 +147,8 @@ body { font: 14px/1.4 system-ui, sans-serif; }
 #ciStayList button.sel { background: rgba(56, 189, 248, .3); }
 #ciStayList button:disabled { opacity: .5; cursor: default; }
 #ciStayList span { font-size: 12px; opacity: .85; }
+/* 入力中 (キーボードが出ている間): 時刻・滞在候補・位置のボタンを隠し、場所とメモを横に並べて、地図が見える面積を確保する */
+#ciSheet.typing .ci-row, #ciSheet.typing .ci-time, #ciSheet.typing #ciStays { display: none; }
+#ciSheet.typing { grid-template-columns: 1fr 1fr; }
+#ciSheet.typing > * { grid-column: 1 / -1; }
+#ciSheet.typing > #ciWhere, #ciSheet.typing > #ciNote { grid-column: auto; }
