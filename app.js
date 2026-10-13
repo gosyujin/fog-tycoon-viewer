@@ -443,21 +443,37 @@ map.on('locationerror', async (e) => {
 const LIVE_MAX_ACC_M = 100, LIVE_MIN_STEP_M = 5;
 let watching = false, follow = false, lastPos = null, wake = null;
 const liveLine = L.polyline([], { color: '#f59e0b', weight: 4, opacity: 0.9, interactive: false }).addTo(map);
+// 軌跡の線は「途切れた所」で分ける。バックグラウンドや圏外の間に移動しても、前の点と次の点を直線で結ばない。
+const LIVE_BREAK_M = 30;                            // バックグラウンドを挟んだとき、これ以上動いていたら線を切る
+const LIVE_GAP_SEC = 90, LIVE_GAP_M = 150;          // 測位が途切れた (時間・距離とも超えた) ら線を切る
+const LIVE_MAX_SPEED_MS = 80;                       // 前の点からの速さがこれを超える (=古い位置からの飛び) なら線を切る
+const liveSegs = [];                                // 線分のリスト (各要素は [latlng, ...])
+let liveBreak = true;                               // 次に取れた点から新しい線分を始める
 async function lockScreen() { try { wake = await navigator.wakeLock.request('screen'); } catch {} }
-document.addEventListener('visibilitychange', () => { if (watching && document.visibilityState === 'visible') lockScreen(); });
+document.addEventListener('visibilitychange', () => {
+  if (!watching) return;
+  if (document.visibilityState === 'visible') lockScreen(); else liveBreak = true;   // 裏に回ったら、戻って最初の点から新しい線分
+});
 map.on('dragstart', () => { follow = false; });   // 地図を動かしたら追従をやめる (◎ で戻る)
 function onLive(e) {
   if (e.accuracy > LIVE_MAX_ACC_M) return;
   const last = live[live.length - 1];
   if (last && map.distance([last[1], last[2]], e.latlng) < LIVE_MIN_STEP_M) return;
-  live.push([Math.floor(Date.now() / 1000), e.latlng.lat, e.latlng.lng]);
-  liveLine.addLatLng(e.latlng);
+  const now = Math.floor(Date.now() / 1000);
+  const dist = last ? map.distance([last[1], last[2]], e.latlng) : 0, dt = last ? now - last[0] : 0;
+  const cut = !liveSegs.length || (last && ((liveBreak && dist > LIVE_BREAK_M) || (dt > LIVE_GAP_SEC && dist > LIVE_GAP_M) || dist / Math.max(1, dt) > LIVE_MAX_SPEED_MS));
+  if (cut) liveSegs.push([]);
+  liveBreak = false;
+  live.push([now, e.latlng.lat, e.latlng.lng]);
+  liveSegs[liveSegs.length - 1].push(e.latlng);
+  liveLine.setLatLngs(liveSegs);
   if (follow) map.setView(e.latlng, Math.max(map.getZoom(), 16));   // move で霧も再描画される
-  else if ($('fog').checked) fog.redraw();
+  else if ($('fog').checked && map.hasLayer(fog)) fog.redraw();   // データ未読み込みで霧が載っていないときは何もしない
 }
 function setLive(on) {
   if (on && !navigator.geolocation) { $('stats').textContent = 'この端末では現在地を取得できません'; return; }
   watching = on; follow = on;
+  if (on) liveBreak = true;   // 追跡を止めていた間の移動は結ばない
   $('live').classList.toggle('on', on);
   $('live').setAttribute('aria-pressed', on);
   if (on) {
