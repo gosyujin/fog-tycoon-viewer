@@ -401,7 +401,8 @@ const recallSource = () => all.concat(live);   // 履歴の元になる点
 const RECALL_MAX_DAYS = 60;   // 一覧に出す日数の上限 (新しい順)
 const RECALL_MERGE_SEC = 15 * 60;   // 半径の外に出て、この時間以内に戻った分は同じ訪問にまとめる
 let recallOn = false, recallR = 100, recallAt = null, recallDay = null;
-map.createPane('recall').style.zIndex = 450;   // 霧 (overlayPane=400) より上、マーカー (600) より下
+// 回転する層 (leaflet-rotate の rotatePane。本体はプラグインが無く mapPane) の中に置く。mapPane の直下だと、回らない層 (ポップアップ・ラベル) の上に重なってしまう
+map.createPane('recall', map.getPane('rotatePane')).style.zIndex = 450;   // 霧 (overlayPane=400) より上
 const recallRenderer = L.canvas({ pane: 'recall' });
 const recallLayer = L.layerGroup().addTo(map), dayLayer = L.layerGroup().addTo(map);
 const tzSec = () => new Date().getTimezoneOffset() * 60;
@@ -504,7 +505,7 @@ const pinPref = {
   get() { try { return localStorage.getItem('fog_pins'); } catch { return null; } },
   set(v) { try { localStorage.setItem('fog_pins', v); } catch {} },
 };
-map.createPane('pins').style.zIndex = 460;   // 履歴の円・軌跡 (450) より上
+map.createPane('pins', map.getPane('rotatePane')).style.zIndex = 460;   // 履歴の円・軌跡 (450) より上
 const pinRenderer = L.canvas({ pane: 'pins', tolerance: 10 });   // 指で押しやすいよう当たりを広げる
 const pinLayer = L.layerGroup();
 const dayText = (ts) => new Date(ts * 1000).toLocaleDateString('ja-JP', { year: 'numeric', month: 'numeric', day: 'numeric', weekday: 'short' });
@@ -516,7 +517,7 @@ function pinPopup(p, list) {
     const li = document.createElement('li'), s = document.createElement('span');
     s.textContent = `${dayText(k.t)} ${hm(k.t)}${k.note ? ` ${k.note}` : ''}`;
     li.append(s);
-    if (ciRemove) {
+    if (ciRemove) {   // 削除は「編集」を押すまで出さない (うっかり押さない)
       const b = document.createElement('button');
       b.type = 'button'; b.className = 'del'; b.textContent = '削除'; b.onclick = () => { map.closePopup(); ciRemove(k.id); };
       li.append(b);
@@ -525,6 +526,12 @@ function pinPopup(p, list) {
   }
   if (list.length > 12) { const li = document.createElement('li'); li.textContent = `ほか ${list.length - 12} 回`; ul.append(li); }
   box.append(head, ul);
+  if (ciRemove) {
+    const ed = document.createElement('button');
+    ed.type = 'button'; ed.className = 'edit'; ed.textContent = '編集';
+    ed.onclick = () => { const on = box.classList.toggle('editing'); ed.textContent = on ? '完了' : '編集'; };
+    box.append(ed);
+  }
   return box;
 }
 

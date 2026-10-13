@@ -114,7 +114,9 @@ body { font: 14px/1.4 system-ui, sans-serif; }
 .pin-labels .pin-label { display: block; }
 .pin-pop ul { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 3px; font-size: 12px; }
 .pin-pop li { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.pin-pop .del { border: 0; background: none; color: #c00; cursor: pointer; font: inherit; padding: 2px 4px; }
+.pin-pop .del { display: none; border: 0; background: none; color: #c00; cursor: pointer; font: inherit; padding: 2px 4px; }
+.pin-pop.editing .del { display: inline-block; }
+.pin-pop .edit { margin-top: 6px; border: 0; background: none; color: #667; cursor: pointer; font: inherit; font-size: 12px; padding: 2px 0; }
 #rcList .rc-ci { color: #c4b5fd; opacity: 1; }
 
 /* チェックインのシート。画面の下端に置き、ソフトキーボードが出たらその上へ (--kb: キーボードの高さ / --vvh: 見えている高さ。app.js の syncKeyboard が入れる) */
