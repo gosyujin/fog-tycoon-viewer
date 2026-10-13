@@ -776,9 +776,10 @@ function ciStays() {
       $('ciTime').value = localInput(s.start);
       if (near) $('ciWhere').value = near.p.name;
       $('ciStays').open = false;
-      map.setView([s.lat, s.lon], Math.max(map.getZoom(), 17));
+      map.setView([s.lat, s.lon], Math.max(map.getZoom(), 17), { animate: false });   // アニメーション中は位置の計算が古い座標のままになり、寄せがずれる
       ciReveal(true);
       $(near ? 'ciSave' : 'ciWhere').focus({ preventScroll: true });
+      setTimeout(() => ciReveal(), 400);   // キーボードが出きって、シートの位置が落ち着いたあとにもう一度確かめる
     };
     box.append(b);
   }
