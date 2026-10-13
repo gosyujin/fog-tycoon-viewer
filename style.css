@@ -6,7 +6,7 @@ body { font: 14px/1.4 system-ui, sans-serif; }
   display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
 }
 /* ダブルタップでページが拡大されるのを防ぐ。拡大縮小は地図(Leaflet)だけ */
-#ui, #ui *, #locate, #mode, #login, #login *, .leaflet-control, .leaflet-control * { touch-action: manipulation; }
+#ui, #ui *, #locate, #mode, #sync, #login, #login *, .leaflet-control, .leaflet-control * { touch-action: manipulation; }
 .fab, #panel button { -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none; }
 #locate {
   position: absolute; z-index: 1000; left: 50%; transform: translateX(-50%);   /* 画面中央 */
@@ -25,6 +25,22 @@ body { font: 14px/1.4 system-ui, sans-serif; }
   bottom: calc(34px + env(safe-area-inset-bottom));
 }
 #live.on { background: #dc2626; color: #fff; }
+/* 左下: Dawarich との同期 (現在地・追跡・霧/ヒートマップと同じ高さ)。左下のビルド表示 (#statbar) の上 */
+#sync {
+  position: absolute; z-index: 1000; left: 10px;
+  bottom: calc(34px + env(safe-area-inset-bottom));
+  font-size: 20px;
+}
+#sync:disabled { opacity: .7; }
+#sync.busy { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+/* 同期の結果など。⚙ を閉じていても見えるように、下のボタンの上に出す */
+#toast {
+  position: absolute; z-index: 1100; left: 50%; transform: translateX(-50%);
+  bottom: calc(90px + env(safe-area-inset-bottom)); max-width: calc(100vw - 32px);
+  padding: 8px 14px; border-radius: 8px; background: rgba(20, 24, 33, .92); color: #eee; font-size: 13px; text-align: center;
+  pointer-events: none;
+}
 /* 右下: 霧 / ヒートマップの切替 (現在地・追跡ボタンと同じ高さ) */
 #mode {
   position: absolute; z-index: 1000; right: 10px;

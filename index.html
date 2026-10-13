@@ -29,7 +29,6 @@
       </select>
     </label>
     <label>同期先 <input type="url" id="syncurl" placeholder="https://mini.xxxx.ts.net" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
-    <button id="sync" type="button">Dawarich と同期</button>
     <button id="reload" type="button">再読み込み</button>
     <button id="logout" type="button">Dropbox の認可を解除</button>
   </div>
@@ -43,6 +42,8 @@
   <span><i style="background:rgb(250,204,21)"></i>4〜9日</span>
   <span><i style="background:rgb(239,68,68)"></i>10日〜</span>
 </div>
+<button id="sync" class="fab" type="button" aria-label="Dawarich と同期" hidden>🔄</button>
+<div id="toast" role="status" hidden></div>
 <button id="mode" class="fab" type="button" aria-pressed="false" aria-label="霧 (押すとヒートマップ)" hidden>🌫</button>
 <button id="live" class="fab" type="button" aria-label="現在地を追跡" aria-pressed="false" hidden>●</button>
 <button id="locate" class="fab" type="button" aria-label="現在地" hidden>◎</button>
