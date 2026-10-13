@@ -67,7 +67,8 @@ async function fetchPoints() {
 }
 
 // ---------- 地図 ----------
-const map = L.map('map', { zoomSnap: 0.5, preferCanvas: true, fadeAnimation: false });   // fadeAnimation: タイルをフェードインさせず、読めた瞬間に出す
+// rotate: leaflet-rotate。コンパスモード (◎ 長押し) で地図を端末の向きに回すためだけに使う (指での回転・回転コントロールは無効)
+const map = L.map('map', { zoomSnap: 0.5, preferCanvas: true, fadeAnimation: false, rotate: true, touchRotate: false, shiftKeyRotate: false, rotateControl: false });   // fadeAnimation: タイルをフェードインさせず、読めた瞬間に出す
 // 動かしている間も、表示領域の外側 EDGE_TILES 枚ぶんまで先に読む (Leaflet の既定は、モバイルでは動かし終わってから表示領域だけを読むので、
 // 隣の地区に動かすと一度空白になる。保存済み (sw.js) なら、端に入る前にもう描かれている)。
 const EDGE_TILES = 1;
@@ -164,16 +165,23 @@ const Fog = L.Layer.extend({
     this._map = m;
     this._c = L.DomUtil.create('canvas', 'leaflet-zoom-hide fog-canvas');
     m.getPanes().overlayPane.appendChild(this._c);
-    m.on('move zoom resize viewreset', this.redraw, this);
+    m.on('move zoom resize viewreset rotate', this.redraw, this);
     this.redraw();
   },
   onRemove(m) {
-    m.off('move zoom resize viewreset', this.redraw, this);
+    m.off('move zoom resize viewreset rotate', this.redraw, this);
     this._c.remove();
   },
   redraw() {
-    const m = this._map, size = m.getSize(), dpr = window.devicePixelRatio || 1, c = this._c;
-    L.DomUtil.setPosition(c, m.containerPointToLayerPoint([0, 0]));
+    const m = this._map, vs = m.getSize(), dpr = window.devicePixelRatio || 1, c = this._c;
+    // 地図が回っているとき (leaflet-rotate) は、画面を覆う正方形を回転と逆向きに回して置く。霧は画面に対して傾かず、四隅も欠けない。
+    // o: canvas の左上 (画面座標)。点は画面座標から o を引いて描く
+    const bearing = m.getBearing ? m.getBearing() : 0, S = bearing ? Math.ceil(Math.hypot(vs.x, vs.y)) : 0;
+    const size = S ? L.point(S, S) : vs, o = S ? L.point((vs.x - S) / 2, (vs.y - S) / 2) : L.point(0, 0);
+    if (S) {
+      const lc = m.containerPointToLayerPoint(vs.divideBy(2));
+      c.style.transform = `translate3d(${lc.x - S / 2}px, ${lc.y - S / 2}px, 0) rotate(${-bearing}deg)`;
+    } else L.DomUtil.setPosition(c, m.containerPointToLayerPoint([0, 0]));
     c.width = size.x * dpr; c.height = size.y * dpr;
     c.style.width = size.x + 'px'; c.style.height = size.y + 'px';
     const g = c.getContext('2d');
@@ -186,11 +194,11 @@ const Fog = L.Layer.extend({
     const mpp = 40075016.686 * Math.cos(m.getCenter().lat * Math.PI / 180) / (256 * 2 ** m.getZoom());
     const r = Math.max(3, +$('radius').value / mpp);
     const b = m.getBounds().pad(r * mpp / 111000 + 0.01);
-    if (mode === 'heat') return this._heat(g, m, size, r, b);
+    if (mode === 'heat') return this._heat(g, m, size, r, b, o);
     const step = Math.max(1, r / 3), seen = new Set();   // 近接点は同じピクセルセルに丸めて描画を減らす
     for (const [, lat, lon] of points.concat(live)) {
       if (!b.contains([lat, lon])) continue;
-      const p = m.latLngToContainerPoint([lat, lon]);
+      const p = m.latLngToContainerPoint([lat, lon]).subtract(o);
       const key = Math.round(p.x / step) + ',' + Math.round(p.y / step);
       if (seen.has(key)) continue;
       seen.add(key);
@@ -206,7 +214,7 @@ const Fog = L.Layer.extend({
   // セルごとの最大値ではなく足し合わせなので、日数の違うセルが隣り合っても色がなめらかにつながる。
   // 1日だけ通った道の中心が「1日」になるよう、道に沿ってセルが並んだときの合計 (HEAT_LINE_SUM) で割る。霧は出さない。
   // リアルタイム追跡の点は「今日1日分」として扱う
-  _heat(g, m, size, r, b) {
+  _heat(g, m, size, r, b, o) {
     const w = Math.ceil(size.x), h = Math.ceil(size.y);
     if (!w || !h) return;
     const step = Math.max(1, r / 8), rg = r / step;   // 格子の1マス (CSS px)。山の半径は常に約8マス (荒いので拡大時に補間して滑らかにする)
@@ -215,7 +223,7 @@ const Fog = L.Layer.extend({
     const F = heatBuf; F.fill(0, 0, gw * gh);
     const add = (lat, lon, n) => {
       if (!b.contains([lat, lon])) return;
-      const p = m.latLngToContainerPoint([lat, lon]), cx = p.x / step, cy = p.y / step;
+      const p = m.latLngToContainerPoint([lat, lon]).subtract(o), cx = p.x / step, cy = p.y / step;
       const x0 = Math.max(0, Math.ceil(cx - rg)), x1 = Math.min(gw - 1, Math.floor(cx + rg));
       const y0 = Math.max(0, Math.ceil(cy - rg)), y1 = Math.min(gh - 1, Math.floor(cy + rg));
       for (let y = y0; y <= y1; y++) {
@@ -304,7 +312,7 @@ const ONE_FINGER_DIR = 1, ONE_FINGER_PX_PER_ZOOM = 90, DOUBLE_TAP_MS = 300, DOUB
     if (e.touches.length !== 1) { z = null; return; }   // 2本指は Leaflet のピンチに任せる
     const t = e.touches[0], now = Date.now();
     if (now - last.t < DOUBLE_TAP_MS && Math.hypot(t.clientX - last.x, t.clientY - last.y) < DOUBLE_TAP_PX) {
-      z = { y: t.clientY, zoom: map.getZoom(), moved: false, at: map.mouseEventToContainerPoint(t), snap: map.options.zoomSnap };
+      z = { y: t.clientY, zoom: map.getZoom(), moved: false, at: follow ? map.getSize().divideBy(2) : map.mouseEventToContainerPoint(t), snap: map.options.zoomSnap };
       last.t = 0;
       e.preventDefault(); e.stopPropagation();   // 2回目のタップは Leaflet のドラッグ・クリックに渡さない
     } else {
@@ -433,17 +441,30 @@ function stopInitialLocate(why) {
   initialLocating = false; quietLocate = false;
   clearTimeout(initialTimer);
   map.off('dragstart', onInitialDrag);
-  if (!watching) map.stopLocate();
+  unwatchPos();
   if (why) $('bt').textContent += ` · 現在地を取得できませんでした (${why})`;
 }
 function startInitialLocate() {
   initialLocating = true; quietLocate = true;
   map.on('dragstart', onInitialDrag);
   initialTimer = setTimeout(() => stopInitialLocate('時間切れ'), INITIAL_LOCATE_MS);
-  map.locate({ watch: true, setView: false, enableHighAccuracy: true, timeout: 30000, maximumAge: 60000 });
+  watchPos(60000);
+}
+// 連続測位 (watch) は1本だけ。リアルタイム追跡・コンパス・起動時の現在地合わせが共有し、全員が要らなくなったら止める
+let posWatch = false;
+function watchPos(maximumAge = 0) {
+  if (posWatch) return;
+  posWatch = true;
+  map.locate({ watch: true, setView: false, enableHighAccuracy: true, maximumAge, timeout: 30000 });
+}
+function unwatchPos() {
+  if (!posWatch || watching || compass || initialLocating) return;
+  posWatch = false;
+  map.stopLocate();
 }
 $('locate').onclick = () => {
-  if (watching) { follow = true; if (lastPos) map.setView(lastPos, Math.max(map.getZoom(), 16)); return; }   // 追跡中は取得し直さず、直近の位置へ戻る
+  if (longPressed) { longPressed = false; return; }   // 長押しで離した指の click は、通常の「現在地へ」にしない
+  if (watching || compass) { setFollow(true); if (lastPos) map.setView(lastPos, map.getZoom()); return; }   // 測位中は取得し直さず、直近の位置へ戻る (縮尺はそのまま)
   if (!navigator.geolocation) { $('stats').textContent = 'この端末では現在地を取得できません'; return; }
   stopInitialLocate();
   quietLocate = false;
@@ -453,14 +474,15 @@ map.on('locationfound', (e) => {
   lastPos = e.latlng;
   if (initialLocating) { map.setView(e.latlng, e.accuracy > 500 ? 15 : 17); stopInitialLocate(); }   // 最初の1点で現在地へ
   if (watching) onLive(e);
+  else if (follow) followStep();
   fitted = true;   // 現在地に合わせたので、データ読み込み時の全体表示で上書きしない
   me.clearLayers();
   L.circle(e.latlng, { radius: e.accuracy, color: '#2563eb', weight: 1, fillOpacity: 0.12, interactive: false }).addTo(me);
   L.circleMarker(e.latlng, { radius: 7, color: '#fff', weight: 2, fillColor: '#2563eb', fillOpacity: 1, interactive: false }).addTo(me);
 });
 map.on('locationerror', async (e) => {
-  if (watching && e.code === 3) return;   // 追跡中のタイムアウトは次の測位を待つだけ
-  if (watching && e.code === 1) setLive(false);   // 許可が取り消されたら止める
+  if ((watching || compass) && e.code === 3) return;   // 追跡中のタイムアウトは次の測位を待つだけ
+  if (e.code === 1) { if (watching) setLive(false); if (compass) setCompass(false); }   // 許可が取り消されたら止める
   if (initialLocating) { if (e.code === 1) stopInitialLocate('許可なし'); return; }   // 許可がなければ諦める。それ以外は次の測位を待つ
   if (quietLocate) { quietLocate = false; return; }
   setPanel(true);
@@ -476,7 +498,7 @@ map.on('locationerror', async (e) => {
 // watchPosition で位置を連続取得し、軌跡(橙)と霧の晴れ範囲に即反映する。点は保存しない(正式な記録は Dawarich → export 経由)。
 // ブラウザはバックグラウンドだと測位が止まるので、追跡中は画面を点けたままにする (Wake Lock)。
 const LIVE_MAX_ACC_M = 100, LIVE_MIN_STEP_M = 5;
-let watching = false, follow = false, lastPos = null, wake = null;
+let watching = false, lastPos = null, wake = null;
 const liveLine = L.polyline([], { color: '#f59e0b', weight: 4, opacity: 0.9, interactive: false }).addTo(map);
 // 軌跡の線は「途切れた所」で分ける。バックグラウンドや圏外の間に移動しても、前の点と次の点を直線で結ばない。
 const LIVE_BREAK_M = 30;                            // バックグラウンドを挟んだとき、これ以上動いていたら線を切る
@@ -489,7 +511,28 @@ document.addEventListener('visibilitychange', () => {
   if (!watching) return;
   if (document.visibilityState === 'visible') lockScreen(); else liveBreak = true;   // 裏に回ったら、戻って最初の点から新しい線分
 });
-map.on('dragstart', () => { follow = false; });   // 地図を動かしたら追従をやめる (◎ で戻る)
+// ---------- 追従 ----------
+// 追従中は現在地を画面の中心に保つ。縮尺は触らない (ズームは画面中心基準にして、拡大縮小しても現在地が中心から外れない)。
+// 地図をドラッグしたら追従をやめる (◎ で戻る)。ピンチは2本指なので除く。
+let follow = false, touching = 0, firstFollowZoom = false;
+function setFollow(on) {
+  follow = on;
+  const z = on ? 'center' : true;
+  map.options.touchZoom = map.options.scrollWheelZoom = map.options.doubleClickZoom = z;
+}
+(() => {
+  const el = map.getContainer(), opt = { capture: true, passive: true };
+  const count = (e) => { touching = e.touches.length; if (!touching) followStep(); };   // 指を離したら、触っている間に動いた分の位置へ寄せる
+  for (const t of ['touchstart', 'touchend', 'touchcancel']) el.addEventListener(t, count, opt);
+})();
+map.on('dragstart', () => { if (touching < 2) setFollow(false); });
+function followStep() {
+  if (!follow || !lastPos || touching) return false;   // 触っている間は動かさない (ピンチ・ドラッグと喧嘩する)
+  const z = firstFollowZoom ? Math.max(map.getZoom(), 16) : map.getZoom();   // 追跡を始めて最初の1回だけ寄る。以降は縮尺に触れない
+  firstFollowZoom = false;
+  map.setView(lastPos, z);   // move で霧も再描画される
+  return true;
+}
 function onLive(e) {
   if (e.accuracy > LIVE_MAX_ACC_M) return;
   const last = live[live.length - 1];
@@ -502,26 +545,92 @@ function onLive(e) {
   live.push([now, e.latlng.lat, e.latlng.lng]);
   liveSegs[liveSegs.length - 1].push(e.latlng);
   liveLine.setLatLngs(liveSegs);
-  if (follow) map.setView(e.latlng, Math.max(map.getZoom(), 16));   // move で霧も再描画される
-  else if ($('fog').checked && map.hasLayer(fog)) fog.redraw();   // データ未読み込みで霧が載っていないときは何もしない
+  if (followStep()) return;
+  if ($('fog').checked && map.hasLayer(fog)) fog.redraw();   // データ未読み込みで霧が載っていないときは何もしない
 }
 function setLive(on) {
   if (on && !navigator.geolocation) { $('stats').textContent = 'この端末では現在地を取得できません'; return; }
-  watching = on; follow = on;
+  watching = on;
+  if (on) setFollow(true);
+  else if (!compass) setFollow(false);
   if (on) liveBreak = true;   // 追跡を止めていた間の移動は結ばない
   $('live').classList.toggle('on', on);
   $('live').setAttribute('aria-pressed', on);
   if (on) {
     quietLocate = false;
-    map.locate({ watch: true, setView: false, enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
+    watchPos();
+    if (lastPos) map.setView(lastPos, Math.max(map.getZoom(), 16));   // 追跡を始めたときだけ、街区が見える縮尺まで寄る (以降は縮尺に触れない)
+    else firstFollowZoom = true;
     lockScreen();
   } else {
-    map.stopLocate();
+    unwatchPos();
     try { wake && wake.release(); } catch {}
     wake = null;
   }
 }
 $('live').onclick = () => setLive(!watching);
+
+// ---------- コンパス (◎ を長押し) ----------
+// 地図を端末の向きに回し、向いている方向を画面の上にする (地図アプリの「方位を追従」と同じ)。現在地への追従も一緒に入る。
+// もう一度長押しで切る (北が上に戻る)。iOS は向きの取得に許可が要り、ユーザー操作の中で聞く必要があるので、長押しの確定時に聞く。
+// 向きは端末のコンパス (iOS: webkitCompassHeading / Android: deviceorientationabsolute の alpha)。軽く均して、一定以上動いたときだけ回す。
+const LONG_PRESS_MS = 500, COMPASS_SMOOTH = 0.3, COMPASS_MIN_DEG = 2, COMPASS_MIN_MS = 80, COMPASS_WAIT_MS = 3000;
+let compass = false, longPressed = false, heading = null, appliedHeading = null, lastRotate = 0, compassWait = 0;
+const angDiff = (a, b) => ((a - b + 540) % 360) - 180;   // a - b を -180..180 に
+function onOrientation(e) {
+  let h = e.webkitCompassHeading;   // iOS: 北を0とする時計回り
+  if (h == null) {
+    if (e.alpha == null || (e.type !== 'deviceorientationabsolute' && !e.absolute)) return;   // 相対値の alpha は北を指さない
+    h = 360 - e.alpha;   // alpha は反時計回り
+  }
+  h += (screen.orientation && screen.orientation.angle) || 0;   // 横向きなど、画面の上が端末の上とずれている分
+  clearTimeout(compassWait);
+  heading = heading == null ? h : (heading + angDiff(h, heading) * COMPASS_SMOOTH + 360) % 360;
+  const now = performance.now();
+  if (appliedHeading != null && (Math.abs(angDiff(heading, appliedHeading)) < COMPASS_MIN_DEG || now - lastRotate < COMPASS_MIN_MS)) return;
+  appliedHeading = heading; lastRotate = now;
+  map.setBearing(360 - heading);   // 向いている方向が上になるよう、逆向きに回す
+}
+async function setCompass(on) {
+  if (on === compass) return;
+  if (on) {
+    if (!navigator.geolocation || !('DeviceOrientationEvent' in window)) { toast('この端末ではコンパスが使えません'); return; }
+    if (typeof DeviceOrientationEvent.requestPermission === 'function') {   // iOS 13+
+      let r = 'denied';
+      try { r = await DeviceOrientationEvent.requestPermission(); } catch {}
+      if (r !== 'granted') { toast('コンパスには「モーションと方向」の許可が必要です (Safari の ぁあ → Webサイトの設定)', 6000); return; }
+    }
+    compass = true; heading = appliedHeading = null;
+    $('locate').classList.add('on'); $('locate').setAttribute('aria-pressed', true);
+    addEventListener('deviceorientation', onOrientation);
+    addEventListener('deviceorientationabsolute', onOrientation);
+    compassWait = setTimeout(() => { toast('端末の向きを取得できません'); setCompass(false); }, COMPASS_WAIT_MS);   // 向きが1度も来なければ諦める (PC など)
+    setFollow(true);
+    watchPos();
+    if (lastPos) followStep();
+    toast('コンパス: 向いている方向が上になります (もう一度長押しで解除)');
+  } else {
+    compass = false;
+    clearTimeout(compassWait);
+    removeEventListener('deviceorientation', onOrientation);
+    removeEventListener('deviceorientationabsolute', onOrientation);
+    $('locate').classList.remove('on'); $('locate').setAttribute('aria-pressed', false);
+    map.setBearing(0);
+    if (!watching) setFollow(false);
+    unwatchPos();
+  }
+}
+(() => {   // 長押し: LONG_PRESS_MS 押し続けたらコンパスを切り替える。離したときの click は通常の「現在地へ」にしない
+  const b = $('locate');
+  let timer = 0;
+  const cancel = () => clearTimeout(timer);
+  b.addEventListener('pointerdown', () => {
+    cancel(); longPressed = false;
+    timer = setTimeout(() => { longPressed = true; setCompass(!compass); }, LONG_PRESS_MS);
+  });
+  for (const t of ['pointerup', 'pointercancel', 'pointerleave']) b.addEventListener(t, cancel);
+  b.addEventListener('contextmenu', (e) => e.preventDefault());
+})();
 
 // ---------- 表示位置の保存 / 起動時の初期位置 ----------
 // 起動 (新しいセッション) は現在地へ。同じセッションでの再表示 (タブの再読み込み・復帰) は最後に見ていた位置を維持。

@@ -12,6 +12,9 @@ body { font: 14px/1.4 system-ui, sans-serif; }
   position: absolute; z-index: 1000; left: 50%; transform: translateX(-50%);   /* 画面中央 */
   bottom: calc(34px + env(safe-area-inset-bottom));   /* Leaflet の帰属表示と重ならない高さ */
 }
+/* 長押しで入るコンパスモード (地図が端末の向きに回る)。-webkit-touch-callout: 長押しのメニューを出さない */
+#locate { -webkit-touch-callout: none; }
+#locate.on { background: #2563eb; color: #fff; }
 /* 画面左下のビルド表示 (gyazo-tycoon-viewer の #statbar と同じ役割)。右下は Leaflet の帰属表示 */
 #statbar {
   position: absolute; left: 8px; bottom: calc(6px + env(safe-area-inset-bottom)); z-index: 1000;
