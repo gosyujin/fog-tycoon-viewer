@@ -6,7 +6,7 @@ body { font: 14px/1.4 system-ui, sans-serif; }
   display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
 }
 /* ダブルタップでページが拡大されるのを防ぐ。拡大縮小は地図(Leaflet)だけ */
-#ui, #ui *, #locate, #mode, #sync, #recallBtn, #pinBtn, #recall, #recall *, #ciSheet, #ciSheet *, #login, #login *, .leaflet-control, .leaflet-control * { touch-action: manipulation; }
+#ui, #ui *, #locate, #ciBtn, #mode, #sync, #recallBtn, #pinBtn, #recall, #recall *, #ciSheet, #ciSheet *, #login, #login *, .leaflet-control, .leaflet-control * { touch-action: manipulation; }
 .fab, #panel button { -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none; }
 #locate {
   position: absolute; z-index: 1000; left: 50%; transform: translateX(-50%);   /* 画面中央 */
@@ -41,7 +41,7 @@ body { font: 14px/1.4 system-ui, sans-serif; }
 /* 同期の結果など。⚙ を閉じていても見えるように、下のボタンの上に出す */
 #toast {
   position: absolute; z-index: 1100; left: 50%; transform: translateX(-50%);
-  bottom: calc(90px + env(safe-area-inset-bottom)); max-width: calc(100vw - 32px);
+  bottom: calc(134px + env(safe-area-inset-bottom)); max-width: calc(100vw - 32px);
   padding: 8px 14px; border-radius: 8px; background: rgba(20, 24, 33, .92); color: #eee; font-size: 13px; text-align: center;
   pointer-events: none;
 }
@@ -81,16 +81,12 @@ body { font: 14px/1.4 system-ui, sans-serif; }
 #login button { background: #2563eb; color: #fff; border: 0; }
 #login code { word-break: break-all; color: #9cf; }
 .err { color: #f88; min-height: 1.4em; margin: 0; }
-/* この辺りの履歴: 🕘 を押してから地図をタップすると、その周りに来た日の一覧が下から出る */
-#recallBtn {
-  position: absolute; z-index: 1000; left: 60px;
-  bottom: calc(34px + env(safe-area-inset-bottom));
-  font-size: 20px;
-}
+/* この辺りの履歴: 🕘 (⚙ の下) を押してから地図をタップすると、その周りに来た日の一覧が下から出る */
+#recallBtn { font-size: 20px; }   /* ⚙ の下 (#ui の列に並ぶ) */
 #recallBtn.on { background: #ea580c; color: #fff; }
 #recall {
   position: absolute; z-index: 1001; left: 10px; right: 10px; max-width: 420px;
-  bottom: calc(90px + env(safe-area-inset-bottom)); max-height: 38vh; overflow-y: auto; overscroll-behavior: contain;
+  bottom: calc(134px + env(safe-area-inset-bottom)); max-height: 38vh; overflow-y: auto; overscroll-behavior: contain;
   padding: 8px 10px; border-radius: 8px; background: rgba(20, 24, 33, .92); color: #eee; font-size: 13px;
 }
 #recall[hidden] { display: none; }
@@ -108,7 +104,7 @@ body { font: 14px/1.4 system-ui, sans-serif; }
 
 /* チェックインのピン (霧/ヒートマップ・履歴と同じ高さの丸ボタンでオンオフ)。名前は寄ったときだけ (.pin-labels) */
 #pinBtn {
-  position: absolute; z-index: 1000; left: 110px;
+  position: absolute; z-index: 1000; right: 58px;
   bottom: calc(34px + env(safe-area-inset-bottom));
   font-size: 20px;
 }
@@ -136,3 +132,9 @@ body { font: 14px/1.4 system-ui, sans-serif; }
 #ciPick.on { background: #ea580c; border-color: #ea580c; }
 .ci-time { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 #ciSave { border: 0; border-radius: 6px; padding: 9px; background: #2563eb; color: #fff; cursor: pointer; }
+/* チェックイン: 現在地 (◎) のすぐ上 */
+#ciBtn {
+  position: absolute; z-index: 1000; left: 50%; transform: translateX(-50%);
+  bottom: calc(84px + env(safe-area-inset-bottom));
+  font-size: 20px;
+}

@@ -13,7 +13,7 @@
 
 <div id="ui" hidden>
   <button id="gear" class="fab" type="button" aria-label="設定" aria-expanded="false" aria-controls="panel">⚙</button>
-  <button id="ciBtn" class="fab" type="button" aria-label="チェックイン" hidden>✅</button>
+  <button id="recallBtn" class="fab" type="button" aria-pressed="false" aria-label="この辺りの履歴 (押してから地図をタップ)" hidden>🕘</button>
   <div id="panel" hidden>
     <strong>Fog Tycoon</strong>
     <div id="stats">読み込み中…</div>
@@ -57,7 +57,6 @@
   <button type="submit" id="ciSave">チェックイン</button>
 </form>
 <button id="mode" class="fab" type="button" aria-pressed="false" aria-label="霧 (押すとヒートマップ)" hidden>🌫</button>
-<button id="recallBtn" class="fab" type="button" aria-pressed="false" aria-label="この辺りの履歴 (押してから地図をタップ)" hidden>🕘</button>
 <button id="pinBtn" class="fab" type="button" aria-pressed="true" aria-label="チェックインのピンを出す/隠す" hidden>📍</button>
 <div id="recall" hidden>
   <div class="rc-head"><strong id="rcTitle"></strong><button id="rcClose" type="button" aria-label="閉じる">×</button></div>
@@ -67,6 +66,7 @@
   <ul id="rcList"></ul>
 </div>
 <button id="live" class="fab" type="button" aria-label="現在地を追跡" aria-pressed="false" hidden>●</button>
+<button id="ciBtn" class="fab" type="button" aria-label="チェックイン" hidden>✅</button>
 <button id="locate" class="fab" type="button" aria-label="現在地 (長押しでコンパス)" aria-pressed="false" hidden>◎</button>
 
 <div id="login" hidden>

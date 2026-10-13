@@ -439,7 +439,7 @@ function showDay(day, btn) {
   for (const s of trackSegments(pts)) L.polyline(s, { ...o, color: '#f97316', weight: 4, opacity: 0.9 }).addTo(dayLayer);
   const dot = (p, color) => L.circleMarker([p[1], p[2]], { ...o, radius: 6, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1 }).addTo(dayLayer);
   dot(pts[0], '#16a34a'); dot(pts[pts.length - 1], '#dc2626');   // 緑=その日の最初の点 / 赤=最後の点
-  map.fitBounds(L.latLngBounds(pts.map((p) => [p[1], p[2]])), { maxZoom: 17, paddingTopLeft: [24, 60], paddingBottomRight: [24, $('recall').offsetHeight + 110] });
+  map.fitBounds(L.latLngBounds(pts.map((p) => [p[1], p[2]])), { maxZoom: 17, paddingTopLeft: [24, 60], paddingBottomRight: [24, $('recall').offsetHeight + 154] });
 }
 
 function recallShow(latlng) {
@@ -471,7 +471,7 @@ function recallShow(latlng) {
     btn.onclick = () => showDay(day, btn);
     li.append(btn); list.append(li);
   }
-  map.panInside(latlng, { paddingTopLeft: [24, 60], paddingBottomRight: [24, $('recall').offsetHeight + 110] });   // タップした所が一覧に隠れないように寄せる
+  map.panInside(latlng, { paddingTopLeft: [24, 60], paddingBottomRight: [24, $('recall').offsetHeight + 154] });   // タップした所が一覧に隠れないように寄せる
   if (rows.length > RECALL_MAX_DAYS) { const li = document.createElement('li'); li.className = 'more'; li.textContent = `ほか ${rows.length - RECALL_MAX_DAYS} 日 (古い順)`; list.append(li); }
 }
 
