@@ -463,7 +463,7 @@ function unwatchPos() {
   map.stopLocate();
 }
 $('locate').onclick = () => {
-  if (longPressed) { longPressed = false; return; }   // 長押しで離した指の click は、通常の「現在地へ」にしない
+  if (longPressed) { longPressed = false; setCompass(!compass); return; }   // 長押し (離した指の click) はコンパスの切り替え。通常の「現在地へ」にしない
   if (watching || compass) { setFollow(true); if (lastPos) map.setView(lastPos, map.getZoom()); return; }   // 測位中は取得し直さず、直近の位置へ戻る (縮尺はそのまま)
   if (!navigator.geolocation) { $('stats').textContent = 'この端末では現在地を取得できません'; return; }
   stopInitialLocate();
@@ -474,7 +474,7 @@ map.on('locationfound', (e) => {
   lastPos = e.latlng;
   if (initialLocating) { map.setView(e.latlng, e.accuracy > 500 ? 15 : 17); stopInitialLocate(); }   // 最初の1点で現在地へ
   if (watching) onLive(e);
-  else if (follow) followStep();
+  followStep();   // 点を足さない測位 (精度が悪い・動いていない) でも、現在地を中心に保つ
   fitted = true;   // 現在地に合わせたので、データ読み込み時の全体表示で上書きしない
   me.clearLayers();
   L.circle(e.latlng, { radius: e.accuracy, color: '#2563eb', weight: 1, fillOpacity: 0.12, interactive: false }).addTo(me);
@@ -526,6 +526,7 @@ function setFollow(on) {
   for (const t of ['touchstart', 'touchend', 'touchcancel']) el.addEventListener(t, count, opt);
 })();
 map.on('dragstart', () => { if (touching < 2) setFollow(false); });
+map.on('zoomend', followStep);   // ピンチ終了のズームは操作前の中心へ寄るので、終わったら現在地へ戻す (止まっていると次の測位でも動かない)
 function followStep() {
   if (!follow || !lastPos || touching) return false;   // 触っている間は動かさない (ピンチ・ドラッグと喧嘩する)
   const z = firstFollowZoom ? Math.max(map.getZoom(), 16) : map.getZoom();   // 追跡を始めて最初の1回だけ寄る。以降は縮尺に触れない
@@ -545,7 +546,7 @@ function onLive(e) {
   live.push([now, e.latlng.lat, e.latlng.lng]);
   liveSegs[liveSegs.length - 1].push(e.latlng);
   liveLine.setLatLngs(liveSegs);
-  if (followStep()) return;
+  if (follow && !touching) return;   // 追従は locationfound の followStep が動かし、move で霧も再描画される
   if ($('fog').checked && map.hasLayer(fog)) fog.redraw();   // データ未読み込みで霧が載っていないときは何もしない
 }
 function setLive(on) {
@@ -597,8 +598,9 @@ async function setCompass(on) {
     if (!navigator.geolocation || !('DeviceOrientationEvent' in window)) { toast('この端末ではコンパスが使えません'); return; }
     if (typeof DeviceOrientationEvent.requestPermission === 'function') {   // iOS 13+
       let r = 'denied';
-      try { r = await DeviceOrientationEvent.requestPermission(); } catch {}
-      if (r !== 'granted') { toast('コンパスには「モーションと方向」の許可が必要です (Safari の ぁあ → Webサイトの設定)', 6000); return; }
+      let why = '';
+      try { r = await DeviceOrientationEvent.requestPermission(); } catch (err) { why = ` (${err.name})`; }
+      if (r !== 'granted') { toast(`「モーションと方向」が許可されていません${why}。アプリを完全に閉じて開き直し、もう一度長押しして「許可」を選んでください`, 7000); return; }
     }
     compass = true; heading = appliedHeading = null;
     $('locate').classList.add('on'); $('locate').setAttribute('aria-pressed', true);
@@ -626,7 +628,7 @@ async function setCompass(on) {
   const cancel = () => clearTimeout(timer);
   b.addEventListener('pointerdown', () => {
     cancel(); longPressed = false;
-    timer = setTimeout(() => { longPressed = true; setCompass(!compass); }, LONG_PRESS_MS);
+    timer = setTimeout(() => { longPressed = true; navigator.vibrate && navigator.vibrate(30); }, LONG_PRESS_MS);   // 切り替えは離したときの click で (許可ダイアログはタイマーからは出せない)
   });
   for (const t of ['pointerup', 'pointercancel', 'pointerleave']) b.addEventListener(t, cancel);
   b.addEventListener('contextmenu', (e) => e.preventDefault());
