@@ -675,17 +675,23 @@ function syncKeyboard() {
   const root = document.documentElement.style;
   root.setProperty('--kb', Math.max(0, window.innerHeight - vv.height - vv.offsetTop) + 'px');
   root.setProperty('--vvh', vv.height + 'px');
-  ciReveal();
+  ciReveal(false, 'vv');
 }
 // 選んだ位置を、シートより上の「見えている範囲」の真ん中に置く。見えている範囲の上端は、iOS がキーボードでページをスクロールした分 (vv.offsetTop) も含める。
 // force=false のときは、すでにその範囲に見えていれば動かさない (地図をタップして選んだ位置を勝手に動かさない)
-function ciReveal(force) {
+function ciReveal(force, why) {
   if (!ciPos || $('ciSheet').hidden) return;
   const top = (vv ? vv.offsetTop : 0) + 70, bottom = $('ciSheet').getBoundingClientRect().top - 20, size = map.getSize(), p = map.latLngToContainerPoint(ciPos);
-  if (!force && p.y >= top && p.y <= bottom && p.x >= 24 && p.x <= size.x - 24) return;
+  const moved = force || !(p.y >= top && p.y <= bottom && p.x >= 24 && p.x <= size.x - 24);
+  // 診断 (iPhone で位置が見えない原因を調べるための一時表示。原因が分かったら消す)
+  $('ciDbg').textContent = `${why || (force ? 'force' : 'check')} ih=${innerHeight} vvh=${vv ? Math.round(vv.height) : '-'} ot=${vv ? Math.round(vv.offsetTop) : '-'} sy=${Math.round(scrollY)} map=${size.y} py=${Math.round(p.y)} px=${Math.round(p.x)} reg=${top}..${Math.round(bottom)} ${moved ? 'MOVE' : 'ok'}`;
+  if (!moved) return;
   map.panBy(p.subtract([size.x / 2, (top + Math.max(top, bottom)) / 2]), { animate: false });
 }
 if (vv) { vv.addEventListener('resize', syncKeyboard); vv.addEventListener('scroll', syncKeyboard); syncKeyboard(); }
+// キーボードで表示領域が縮むと、Leaflet が地図の中心を保ったまま大きさを取り直し (invalidateSize)、上に置いた位置が表示領域の外へずれる。取り直したあとにも置き直す
+map.on('resize', () => ciReveal(false, 'resize'));
+$('ciSheet').addEventListener('focusin', () => { for (const ms of [0, 300, 700]) setTimeout(() => ciReveal(false, `f${ms}`), ms); });
 
 function ciSetPos(lat, lon, label) {
   ciPos = L.latLng(lat, lon); ciPicking = false;
@@ -700,7 +706,7 @@ function ciSetPos(lat, lon, label) {
     b.type = 'button'; b.textContent = `${p.name} (${Math.round(d)}m)`; b.onclick = () => { $('ciWhere').value = p.name; };
     chips.append(b);
   }
-  ciReveal();
+  ciReveal(false, 'setPos');
 }
 // 名前の候補 (datalist): 欄に文字を打ち始めたときに、近い順に作る
 function ciFillNames() {
@@ -777,9 +783,9 @@ function ciStays() {
       if (near) $('ciWhere').value = near.p.name;
       $('ciStays').open = false;
       map.setView([s.lat, s.lon], Math.max(map.getZoom(), 17), { animate: false });   // アニメーション中は位置の計算が古い座標のままになり、寄せがずれる
-      ciReveal(true);
+      ciReveal(true, 'pick');
       $(near ? 'ciSave' : 'ciWhere').focus({ preventScroll: true });
-      setTimeout(() => ciReveal(), 400);   // キーボードが出きって、シートの位置が落ち着いたあとにもう一度確かめる
+      for (const ms of [150, 400, 800, 1500]) setTimeout(() => ciReveal(false, `t${ms}`), ms);   // キーボードが出きって、シートの位置が落ち着いたあとにも確かめる
     };
     box.append(b);
   }
