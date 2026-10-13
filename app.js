@@ -677,10 +677,13 @@ function syncKeyboard() {
   root.setProperty('--vvh', vv.height + 'px');
   ciReveal();
 }
-// 選んだ位置がシートやキーボードに隠れないよう、見える範囲に寄せる (シートの上端より下が隠れている)
-function ciReveal() {
+// 選んだ位置を、シートより上の「見えている範囲」の真ん中に置く。見えている範囲の上端は、iOS がキーボードでページをスクロールした分 (vv.offsetTop) も含める。
+// force=false のときは、すでにその範囲に見えていれば動かさない (地図をタップして選んだ位置を勝手に動かさない)
+function ciReveal(force) {
   if (!ciPos || $('ciSheet').hidden) return;
-  map.panInside(ciPos, { paddingTopLeft: [24, 70], paddingBottomRight: [24, window.innerHeight - $('ciSheet').getBoundingClientRect().top + 20] });
+  const top = (vv ? vv.offsetTop : 0) + 70, bottom = $('ciSheet').getBoundingClientRect().top - 20, size = map.getSize(), p = map.latLngToContainerPoint(ciPos);
+  if (!force && p.y >= top && p.y <= bottom && p.x >= 24 && p.x <= size.x - 24) return;
+  map.panBy(p.subtract([size.x / 2, (top + Math.max(top, bottom)) / 2]), { animate: false });
 }
 if (vv) { vv.addEventListener('resize', syncKeyboard); vv.addEventListener('scroll', syncKeyboard); syncKeyboard(); }
 
@@ -690,16 +693,23 @@ function ciSetPos(lat, lon, label) {
   $('ciPos').textContent = `📍 ${label}`;
   ciMark.clearLayers();
   L.circleMarker(ciPos, { pane: 'recall', renderer: recallRenderer, radius: 8, color: '#fff', weight: 2, fillColor: '#facc15', fillOpacity: 1, interactive: false }).addTo(ciMark);
-  const near = placesNear(), chips = $('ciNear'), names = $('ciPlaces');
-  chips.replaceChildren(); names.replaceChildren();
+  const near = placesNear(), chips = $('ciNear');
+  chips.replaceChildren(); $('ciPlaces').replaceChildren();
   for (const { p, d } of near.filter((x) => x.d <= CI_NEAR_M).slice(0, 5)) {
     const b = document.createElement('button');
     b.type = 'button'; b.textContent = `${p.name} (${Math.round(d)}m)`; b.onclick = () => { $('ciWhere').value = p.name; };
     chips.append(b);
   }
-  for (const n of new Set(near.map((x) => x.p.name))) { const o = document.createElement('option'); o.value = n; names.append(o); }
   ciReveal();
 }
+// 名前の候補 (datalist): 欄に文字を打ち始めたときに、近い順に作る
+function ciFillNames() {
+  const names = $('ciPlaces');
+  if (names.children.length) return;
+  const list = ciPos ? placesNear().map((x) => x.p) : ci.places;
+  for (const n of new Set(list.map((p) => p.name))) { const o = document.createElement('option'); o.value = n; names.append(o); }
+}
+$('ciWhere').addEventListener('input', ciFillNames);
 
 function ciLocate() {
   $('ciPos').textContent = '現在地を取得中…';
@@ -767,7 +777,7 @@ function ciStays() {
       if (near) $('ciWhere').value = near.p.name;
       $('ciStays').open = false;
       map.setView([s.lat, s.lon], Math.max(map.getZoom(), 17));
-      ciReveal();
+      ciReveal(true);
       $(near ? 'ciSave' : 'ciWhere').focus({ preventScroll: true });
     };
     box.append(b);
@@ -793,7 +803,6 @@ function ciOpen() {
   $('ciStays').open = false;
   ciStays();
   ciLocate();
-  $('ciWhere').focus({ preventScroll: true });
 }
 function ciClose() {
   $('ciSheet').hidden = true; stayLayer.clearLayers(); ciPicking = false; $('ciPick').classList.remove('on'); ciMark.clearLayers(); ciPos = null;
