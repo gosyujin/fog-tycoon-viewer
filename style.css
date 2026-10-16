@@ -9,7 +9,7 @@ body { font: 14px/1.4 system-ui, sans-serif; }
 #ui, #ui *, #locate, #ciBtn, #mode, #sync, #recallBtn, #pinBtn, #recall, #recall *, #ciSheet, #ciSheet *, #login, #login *, .leaflet-control, .leaflet-control * { touch-action: manipulation; }
 .fab, #panel button { -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none; }
 #locate {
-  position: absolute; z-index: 1000; left: 50%; transform: translateX(-50%);   /* 画面中央 */
+  position: absolute; z-index: 1000; left: calc(50% - 70px);   /* 画面中央のチェックイン (✅) の左 (右の ● と左右対称) */
   bottom: calc(34px + env(safe-area-inset-bottom));   /* Leaflet の帰属表示と重ならない高さ */
 }
 /* 長押しで入るコンパスモード (地図が端末の向きに回る)。-webkit-touch-callout: 長押しのメニューを出さない */
@@ -23,7 +23,7 @@ body { font: 14px/1.4 system-ui, sans-serif; }
   background: rgba(20, 24, 33, .85); color: #aab; font-size: 11px; line-height: 1.5;
 }
 #statbar:empty { display: none; }
-/* リアルタイム追跡のON/OFF。現在地ボタンのすぐ右 */
+/* リアルタイム追跡のON/OFF。画面中央のチェックイン (✅) のすぐ右 */
 #live {
   position: absolute; z-index: 1000; left: calc(50% + 30px);
   bottom: calc(34px + env(safe-area-inset-bottom));
@@ -136,10 +136,10 @@ body { font: 14px/1.4 system-ui, sans-serif; }
 #ciPick.on { background: #ea580c; border-color: #ea580c; }
 .ci-time { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 #ciSave { border: 0; border-radius: 6px; padding: 9px; background: #2563eb; color: #fff; cursor: pointer; }
-/* チェックイン: 現在地 (◎) のすぐ上 */
+/* チェックイン: 画面下中央 (左に現在地 ◎、右に追跡 ●) */
 #ciBtn {
   position: absolute; z-index: 1000; left: 50%; transform: translateX(-50%);
-  bottom: calc(84px + env(safe-area-inset-bottom));
+  bottom: calc(34px + env(safe-area-inset-bottom));
   font-size: 20px;
 }
 /* この日の滞在から選ぶ (時刻欄の日の候補) */
