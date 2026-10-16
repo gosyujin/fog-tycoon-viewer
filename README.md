@@ -25,7 +25,7 @@ fog-tycoon の外出先用ビューア(静的ページ)。GitHub Pages に置く
 - ボタン類はダブルタップでページが拡大しない(`touch-action: manipulation`。拡大縮小は地図だけ)
 - 画面左下に `build <sha> (<時刻>)` を表示。起動時に最新のデプロイと比べ、古ければ読み直す(GitHub Actions が `build-info.js` を上書き。ローカルは `dev`)
 - 地図タイルを端末にキャッシュ(`sw.js`。見たタイルだけを最大3000枚・14日間保存し、2回目以降は通信せずに表示。オフラインでも見たことのある場所は出る)。初期表示は前回の位置から始め、東京や日本全体を経由しない
-- ⚙ の「Dawarich と同期」: Tailscale につながった Mac の同期サーバ(fog-tycoon の `scripts/sync-server.mjs`)に依頼し、Mac が Dawarich の最新データを書き出したら読み直して最新の軌跡にする。同期先の URL(Mac の `tailscale serve` の `https://…ts.net`)は ⚙ に入力し、この端末にだけ保存する
+- 🔄 (左下) は差分の同期: Tailscale につながった Mac の同期サーバ(fog-tycoon の `scripts/sync-server.mjs`)の `/sync/recent` に依頼し、Mac が直近の分だけ Dawarich から取り直して `recent.json` に書いたら、それを取り込む(1秒前後)。⚙ の「Dawarich と全件で同期」は `/sync`(全件の書き出し、約15秒)のあと `points.json` を読み直す。Dawarich 側で古い点を消したあとすぐ反映したいとき用(1時間ごとの全件でも正される)。同期先の URL(Mac の `tailscale serve` の `https://…ts.net`)は ⚙ に入力し、この端末にだけ保存する。同期サーバが古く `/sync/recent` が無いとき(404)は、その旨を出す
 - 直近の点の自動取り込み(表示中は60秒ごとに Dropbox の `/recent.json` を読み、`points.json` の `since` 以降をその点で置き換えて霧・統計に反映する。GPS は使わない。Mac が60秒ごとに Dawarich から直近の分だけ書く(fog-tycoon の README の「差分エクスポート」)。最後に全件を読み込んだ以降に Dawarich に届いた点は、橙の線でも描く。画面が裏に回ったら止め、戻ったらすぐ読む。`recent.json` の `since` が読み込み済みの `points.json` より新しいとき(全件が書き直された)は全件を読み直す。全件より古い `recent.json` は使わない。霧に関係しないヒートマップのセルと軌跡は、切り替えたときに作り直す。リアルタイム追跡の点は、Dawarich から届いた最後の点より新しい分だけヒートマップに足す)
 - 通信できないときは端末に残した控えを表示
 

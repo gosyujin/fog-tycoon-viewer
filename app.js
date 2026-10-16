@@ -329,28 +329,29 @@ async function load() {
 // 画面が見えている間だけ読む。points.json の since 以降を recent.json の点で置き換え、霧・統計に反映する (GPS は使わない)。
 // 最後の全件読み込み以降の分は、橙の線でも描く。recent.json の since が読み込み済みの points.json より新しいとき (全件が書き直された) は、全件を読み直す。
 const RECENT_POLL_MS = 60000;
-let recentBusy = false, recentTimer = 0;
-async function pollRecent() {
-  if (recentBusy || !all.length) return;   // 全件が読めていないうちは重ねない
-  recentBusy = true;
-  try {
-    let r = await fetchRecent();
-    if (!r || !Array.isArray(r.points) || r.generated === recentGen) return;
-    if (r.since * 1000 > baseGenerated) { showData(await fetchPoints(), false); if (r.generated < baseGenerated) return; }   // 隙間があるので全件を読み直す
-    if (r.generated < baseGenerated) return;   // 全件より古い recent.json は使わない
-    recentGen = r.generated;
-    all = all.filter((p) => p[0] < r.since).concat(r.points);
-    note = ` · 更新 ${new Date(r.generated).toLocaleString('ja-JP')}`;
-    applyRange(true);
-    recentLayer.clearLayers();
-    for (const seg of trackSegments(r.points.filter((p) => p[0] * 1000 > baseGenerated))) L.polyline(seg, { color: '#f59e0b', weight: 4, opacity: 0.9, interactive: false }).addTo(recentLayer);
-  } catch {} finally { recentBusy = false; }   // 圏外・認可切れ・まだ書かれていないときは、次の回に任せる
+let recentRun = null, recentTimer = 0;
+// 同時に呼ばれたら実行中のものを待つ。取り込んだら true、変化なし・まだ無いなら false。通信の失敗は投げる (定期の取り込みは握りつぶし、同期ボタンは表示する)
+const pollRecent = () => recentRun || (recentRun = pollRecentOnce().finally(() => { recentRun = null; }));
+async function pollRecentOnce() {
+  if (!all.length) return false;   // 全件が読めていないうちは重ねない
+  const r = await fetchRecent();
+  if (!r || !Array.isArray(r.points) || r.generated === recentGen) return false;
+  if (r.since * 1000 > baseGenerated) { showData(await fetchPoints(), false); if (r.generated < baseGenerated) return false; }   // 隙間があるので全件を読み直す
+  if (r.generated < baseGenerated) return false;   // 全件より古い recent.json は使わない
+  recentGen = r.generated;
+  all = all.filter((p) => p[0] < r.since).concat(r.points);
+  note = ` · 更新 ${new Date(r.generated).toLocaleString('ja-JP')}`;
+  applyRange(true);
+  recentLayer.clearLayers();
+  for (const seg of trackSegments(r.points.filter((p) => p[0] * 1000 > baseGenerated))) L.polyline(seg, { color: '#f59e0b', weight: 4, opacity: 0.9, interactive: false }).addTo(recentLayer);
+  return true;
 }
+const pollRecentQuiet = () => pollRecent().catch(() => {});   // 圏外・認可切れ・まだ書かれていないときは、次の回に任せる
 function startRecentPoll() {
   clearInterval(recentTimer); recentTimer = 0;
   if (document.visibilityState !== 'visible') return;
-  pollRecent();
-  recentTimer = setInterval(pollRecent, RECENT_POLL_MS);
+  pollRecentQuiet();
+  recentTimer = setInterval(pollRecentQuiet, RECENT_POLL_MS);
 }
 document.addEventListener('visibilitychange', startRecentPoll);   // 裏に回ったら止め、戻ったらすぐ読む
 
@@ -919,27 +920,33 @@ function toast(msg, ms = 4000) {
   clearTimeout(toastTimer);
   if (ms) toastTimer = setTimeout(() => { t.hidden = true; }, ms);
 }
-$('sync').onclick = async () => {
+// 🔄 は差分 (Mac が直近の分だけ Dawarich から取り直す。1秒前後) → recent.json を取り込む。
+// ⚙ の「全件で同期」は全件 (約15秒) → points.json を読み直す。Dawarich 側で消した古い点を、すぐ反映したいとき用 (1時間ごとの全件でも正される)。
+async function syncWith(path, apply, busyMsg) {
   const base = $('syncurl').value.trim().replace(/\/+$/, '');
   if (!base) { setPanel(true); $('syncurl').focus(); toast('同期先の URL を入力してください (Mac の tailscale serve の https://…ts.net)', 6000); return; }
   LS.set('fog_sync_url', base);
-  const btn = $('sync'), ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), SYNC_TIMEOUT_MS);
-  btn.disabled = true; btn.classList.add('busy'); toast('Dawarich と同期しています…', 0);
+  const btns = [$('sync'), $('syncFull')], ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), SYNC_TIMEOUT_MS);
+  for (const b of btns) b.disabled = true;
+  $('sync').classList.add('busy'); toast(busyMsg, 0);
   try {
-    const r = await fetch(base + '/sync', { method: 'POST', headers: { 'x-fog-sync': '1' }, signal: ctl.signal });
+    const r = await fetch(base + path, { method: 'POST', headers: { 'x-fog-sync': '1' }, signal: ctl.signal });
     const d = await r.json().catch(() => ({}));
     if (r.status === 403) throw new Error('拒否されました (この URL のページから開いていますか?)');
+    if (r.status === 404) throw new Error('同期サーバが古いようです。Mac で sync-server を再起動してください');
     if (!r.ok || !d.ok) throw new Error('同期に失敗しました: ' + (d.detail ? d.detail.split('\n').pop() : d.error || r.status));
-    await load();
-    toast(`同期しました${d.points ? ` (${d.points.toLocaleString()} 点)` : ''}`);
+    const changed = await apply();
+    toast(changed === false ? '同期しました (新しい点はありません)' : `同期しました${path === '/sync' && d.points ? ` (${d.points.toLocaleString()} 点)` : ''}`);
   } catch (err) {
     toast(err.name === 'AbortError' ? '同期がタイムアウトしました。もう一度試してください'
       : err instanceof TypeError ? '同期サーバに届きません。Tailscale に接続しているか、URL を確認してください'
       : err.message, 7000);
   } finally {
-    clearTimeout(timer); btn.disabled = false; btn.classList.remove('busy');
+    clearTimeout(timer); for (const b of btns) b.disabled = false; $('sync').classList.remove('busy');
   }
-};
+}
+$('sync').onclick = () => syncWith('/sync/recent', async () => (all.length ? pollRecent() : (await load(), true)), '最新の点を取り込んでいます…');   // まだ全件を読めていなければ全件から
+$('syncFull').onclick = () => syncWith('/sync', async () => { await load(); return true; }, 'Dawarich と全件で同期しています…');
 $('reload').onclick = load;
 $('logout').onclick = () => {
   if (!confirm('この端末の Dropbox 認可と控えを削除しますか?')) return;
