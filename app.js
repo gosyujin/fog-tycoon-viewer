@@ -1,8 +1,9 @@
 // fog-tycoon の外出先ビューア。コード・鍵・データは含まない。
 // Dropbox(App Folder) の /points.json を読み、/checkins.json を読み書きする。端末で認可する (PKCE・files.content.read / write)。
 // points.json: { generated, points: [[epochSec, lat, lon], ...] } (時刻昇順)
+// recent.json: { generated, since, points } 直近の点だけ (points.json の since 以降をこれで置き換える)。Mac が60秒ごとに書き、表示中は60秒ごとに読む
 const SCOPE = 'files.content.read files.content.write';   // write: チェックインを /checkins.json に書く
-const DATA_PATH = '/points.json';
+const DATA_PATH = '/points.json', RECENT_PATH = '/recent.json';
 const REDIR = location.origin + location.pathname;
 const GAP_SEC = 30 * 60;   // この時間以上空いたら軌跡を分割
 const GAP_M = 2000;        // この距離以上飛んだら軌跡を分割
@@ -66,6 +67,17 @@ async function fetchPoints() {
   return JSON.parse(text);
 }
 
+// 直近の点 (recent.json)。まだ書かれていなければ null
+async function fetchRecent() {
+  const r = await fetch('https://content.dropboxapi.com/2/files/download', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + await token(), 'Dropbox-API-Arg': JSON.stringify({ path: RECENT_PATH }) },
+  });
+  if (r.status === 409 && (await r.text()).includes('not_found')) return null;
+  if (!r.ok) throw new Error('download ' + r.status);
+  return r.json();
+}
+
 // ---------- 地図 ----------
 // rotate: leaflet-rotate。コンパスモード (◎ 長押し) で地図を端末の向きに回すためだけに使う (指での回転・回転コントロールは無効)
 const map = L.map('map', { zoomSnap: 0.5, preferCanvas: true, fadeAnimation: false, rotate: true, touchRotate: false, shiftKeyRotate: false, rotateControl: false });   // fadeAnimation: タイルをフェードインさせず、読めた瞬間に出す
@@ -86,8 +98,11 @@ new BufferedTileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
 }).addTo(map);
 
 let all = [], points = [];
+let baseGenerated = 0, recentGen = 0;   // 読み込んだ points.json の generated (ms) / 取り込んだ recent.json の generated
+let cellsStale = false, tracksStale = false;   // 直近の取り込みで作り直しを省いた (ヒートマップ・軌跡に切り替えたときに作り直す)
 const live = [];   // リアルタイム追跡で取った点 [epochSec, lat, lon] (メモリのみ。霧・軌跡には即反映)
 const tracksLayer = L.layerGroup();   // 軌跡は既定でオフ
+const recentLayer = L.layerGroup().addTo(map);   // 最後の全件読み込み以降に Dawarich に届いた点の軌跡 (橙)
 let mode = 'fog';   // 'fog' (通った所は全部晴れ) | 'heat' (訪問日数のヒートマップ)
 let cells = [];   // 濃淡モード用: [lat, lon, 訪問日数] (CELL_M 四方のセル単位で集計)
 const CELL_M = 20;
@@ -235,7 +250,8 @@ const Fog = L.Layer.extend({
       }
     };
     for (const [lat, lon, n] of cells) add(lat, lon, n);
-    for (const [, lat, lon] of live) add(lat, lon, 1);
+    const served = all.length ? all[all.length - 1][0] : 0;   // Dawarich から届いた最後の点。それ以前の追跡の点は、すでに cells に入っている
+    for (const [ts, lat, lon] of live) if (ts > served) add(lat, lon, 1);
     // セルが道に沿って CELL_M おきに並んだときの、中心での合計 (= 1日分の道の中心の値)
     let line = 0;
     for (let k = -50; k <= 50; k++) line += heatAt(Math.abs(k) * CELL_M / +$('radius').value);
@@ -271,19 +287,21 @@ function drawTracks() {
 }
 
 let note = '', fitted = false;
-function applyRange() {
+// light: 直近の取り込みから呼ぶとき。見えていないもの (ヒートマップのセル・軌跡) の作り直しを省く
+function applyRange(light) {
   const v = $('range').value;
   const since = v === 'all' ? 0 : Date.now() / 1000 - Number(v) * 86400;
   points = all.filter((p) => p[0] >= since);
   const km = points.reduce((s, p, i) => (i && p[0] - points[i - 1][0] <= GAP_SEC ? s + map.distance([points[i - 1][1], points[i - 1][2]], [p[1], p[2]]) : s), 0) / 1000;
   $('stats').textContent = `${points.length.toLocaleString()} 点 / 約 ${km.toFixed(1)} km${note}`;
-  buildCells();
-  drawTracks();
-  if ($('fog').checked) fog.redraw();
+  if (light && mode !== 'heat') cellsStale = true; else { buildCells(); cellsStale = false; }
+  if (light && !map.hasLayer(tracksLayer)) tracksStale = true; else { drawTracks(); tracksStale = false; }
+  if ($('fog').checked && map.hasLayer(fog)) fog.redraw();
 }
 
 function showData(d, offline) {
   all = d.points || [];
+  baseGenerated = d.generated || 0; recentGen = 0; recentLayer.clearLayers();
   const when = d.generated ? new Date(d.generated).toLocaleString('ja-JP') : '';
   note = (when ? ` · 更新 ${when}` : '') + (offline ? ' · オフライン(控え)' : '');
   if (!all.length) { $('stats').textContent = '点がありません'; return; }
@@ -306,6 +324,35 @@ async function load() {
     $('stats').textContent = '読み込めません: ' + err.message;
   }
 }
+
+// ---------- 直近の点 (recent.json) を60秒ごとに取り込む ----------
+// 画面が見えている間だけ読む。points.json の since 以降を recent.json の点で置き換え、霧・統計に反映する (GPS は使わない)。
+// 最後の全件読み込み以降の分は、橙の線でも描く。recent.json の since が読み込み済みの points.json より新しいとき (全件が書き直された) は、全件を読み直す。
+const RECENT_POLL_MS = 60000;
+let recentBusy = false, recentTimer = 0;
+async function pollRecent() {
+  if (recentBusy || !all.length) return;   // 全件が読めていないうちは重ねない
+  recentBusy = true;
+  try {
+    let r = await fetchRecent();
+    if (!r || !Array.isArray(r.points) || r.generated === recentGen) return;
+    if (r.since * 1000 > baseGenerated) { showData(await fetchPoints(), false); if (r.generated < baseGenerated) return; }   // 隙間があるので全件を読み直す
+    if (r.generated < baseGenerated) return;   // 全件より古い recent.json は使わない
+    recentGen = r.generated;
+    all = all.filter((p) => p[0] < r.since).concat(r.points);
+    note = ` · 更新 ${new Date(r.generated).toLocaleString('ja-JP')}`;
+    applyRange(true);
+    recentLayer.clearLayers();
+    for (const seg of trackSegments(r.points.filter((p) => p[0] * 1000 > baseGenerated))) L.polyline(seg, { color: '#f59e0b', weight: 4, opacity: 0.9, interactive: false }).addTo(recentLayer);
+  } catch {} finally { recentBusy = false; }   // 圏外・認可切れ・まだ書かれていないときは、次の回に任せる
+}
+function startRecentPoll() {
+  clearInterval(recentTimer); recentTimer = 0;
+  if (document.visibilityState !== 'visible') return;
+  pollRecent();
+  recentTimer = setInterval(pollRecent, RECENT_POLL_MS);
+}
+document.addEventListener('visibilitychange', startRecentPoll);   // 裏に回ったら止め、戻ったらすぐ読む
 
 // ---------- 1本指ズーム: ダブルタップの2回目で指を離さず上下にドラッグ (他の地図アプリと同じ操作) ----------
 // ONE_FINGER_DIR: 1 = 下にドラッグで拡大 / -1 = 上にドラッグで拡大
@@ -376,7 +423,7 @@ const setPanel = (open) => { $('panel').hidden = !open; $('gear').setAttribute('
 $('gear').onclick = () => setPanel($('panel').hidden);
 map.on('click', () => setPanel(false));
 $('fog').onchange = (e) => { saveSettings(); e.target.checked ? fog.addTo(map) : map.removeLayer(fog); syncLegend(); };
-$('tracks').onchange = (e) => { saveSettings(); e.target.checked ? tracksLayer.addTo(map) : map.removeLayer(tracksLayer); };
+$('tracks').onchange = (e) => { saveSettings(); if (e.target.checked) { if (tracksStale) { drawTracks(); tracksStale = false; } tracksLayer.addTo(map); } else map.removeLayer(tracksLayer); };
 $('radius').oninput = (e) => { $('rv').textContent = e.target.value; saveSettings(); if ($('fog').checked) fog.redraw(); };
 $('density').oninput = (e) => { $('dv').textContent = e.target.value; saveSettings(); if ($('fog').checked) fog.redraw(); };
 $('range').onchange = () => { saveSettings(); applyRange(); };
@@ -389,6 +436,7 @@ function setMode(m) {
   $('mode').setAttribute('aria-pressed', heat);
   $('mode').setAttribute('aria-label', heat ? 'ヒートマップ (押すと霧)' : '霧 (押すとヒートマップ)');
   syncLegend();
+  if (heat && cellsStale) { buildCells(); cellsStale = false; }
   if (map.hasLayer(fog)) fog.redraw();   // 起動時はまだ地図に載っていない
 }
 $('mode').onclick = () => { setMode(mode === 'heat' ? 'fog' : 'heat'); LS.set('fog_mode', mode); };
@@ -1194,6 +1242,6 @@ if ('serviceWorker' in navigator) addEventListener('load', () => navigator.servi
   $('sync').hidden = false;
   setMode(LS.get('fog_mode') === 'heat' ? 'heat' : 'fog');
   initialView();
-  load();
+  load().then(startRecentPoll);
   ciStart();
 })();
