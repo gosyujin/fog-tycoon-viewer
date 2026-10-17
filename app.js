@@ -28,8 +28,22 @@ async function startLogin(key) {
   });
 }
 
+// Dropbox への通信。電波が弱い (アンテナ1本・SOS のみ) と、機内モードのように即失敗せず、つながらないまま待ち続けることがある。
+// 待ち続けると「読み込み中」のまま・同期が詰まる・チェックインが送られない (ciBusy が戻らない) ので、本文を読み終えるまでを時間で打ち切り、
+// 通信できないとき (TypeError) と同じ失敗として扱う。呼び出し側は fetch の代わりに使い、Response と同じに読める。
+const DBX_MS = { token: 10000, points: 30000, recent: 12000, ci: 15000 };   // points は約1MB
+async function dbx(url, opt, ms) {
+  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms);
+  try {
+    const r = await fetch(url, { ...opt, signal: ctl.signal });
+    return new Response(await r.text(), { status: r.status, headers: r.headers });
+  } catch (e) {
+    throw e.name === 'AbortError' ? new TypeError('通信がタイムアウトしました') : e;
+  } finally { clearTimeout(t); }
+}
+
 async function tokenReq(params) {
-  const r = await fetch('https://api.dropboxapi.com/oauth2/token', { method: 'POST', body: new URLSearchParams(params) });
+  const r = await dbx('https://api.dropboxapi.com/oauth2/token', { method: 'POST', body: new URLSearchParams(params) }, DBX_MS.token);
   if (!r.ok) throw new Error('token ' + r.status);
   return r.json();
 }
@@ -69,10 +83,10 @@ async function loadCopy(name) {
 }
 
 async function fetchPoints() {
-  const r = await fetch('https://content.dropboxapi.com/2/files/download', {
+  const r = await dbx('https://content.dropboxapi.com/2/files/download', {
     method: 'POST',
     headers: { Authorization: 'Bearer ' + await token(), 'Dropbox-API-Arg': JSON.stringify({ path: DATA_PATH }) },
-  });
+  }, DBX_MS.points);
   if (!r.ok) throw new Error('download ' + r.status + ' ' + (await r.text()).slice(0, 120));
   const text = await r.text();
   saveCopy('points.json', text);
@@ -81,10 +95,10 @@ async function fetchPoints() {
 
 // 直近の点 (recent.json)。まだ書かれていなければ null
 async function fetchRecent() {
-  const r = await fetch('https://content.dropboxapi.com/2/files/download', {
+  const r = await dbx('https://content.dropboxapi.com/2/files/download', {
     method: 'POST',
     headers: { Authorization: 'Bearer ' + await token(), 'Dropbox-API-Arg': JSON.stringify({ path: RECENT_PATH }) },
-  });
+  }, DBX_MS.recent);
   if (r.status === 409 && (await r.text()).includes('not_found')) return null;
   if (!r.ok) throw new Error('download ' + r.status);
   const text = await r.text();
@@ -334,20 +348,37 @@ function showData(d, offline) {
   applyRange();
 }
 
-async function load() {
-  $('stats').textContent = '読み込み中…';
+// 端末の控えで描く。控えが無い・読めないときは false
+async function showCopy() {
+  const cached = await loadCopy('points.json');
+  if (!cached) return false;
   try {
-    showData(await fetchPoints(), false);
+    showData(JSON.parse(cached), true);
+    const rc = await loadCopy('recent.json');   // 最後に読めた直近の点も重ねる (全件との間に隙間があれば使わない)
+    if (rc) { const r = JSON.parse(rc); if (Array.isArray(r.points) && r.since * 1000 <= baseGenerated) applyRecent(r, true); }
+    return true;
+  } catch { return false; }
+}
+
+// 最新 (Dropbox) を取りに行く。COPY_FIRST_MS 待っても返らないときは、先に控えで描いて見られるようにする
+// (電波が弱いと、失敗せずに待たされる。タイムアウト (DBX_MS.points) までの間、霧が出ないのを避ける)。取れたら最新に置き換える。
+const COPY_FIRST_MS = 1200;
+async function load() {
+  const had = all.length > 0;   // 再読み込み: すでに描いてある (描き直さず、取れたときだけ置き換える)
+  if (!had) $('stats').textContent = '読み込み中…';
+  let settled = false, copied = had;
+  const p = fetchPoints().finally(() => { settled = true; });
+  p.catch(() => {});   // 下の await で拾う。先に失敗しても未処理にしない
+  if (!copied) {
+    await Promise.race([p.catch(() => {}), new Promise((r) => setTimeout(r, COPY_FIRST_MS))]);
+    if (!settled) copied = await showCopy();
+  }
+  try {
+    showData(await p, false);
   } catch (err) {
-    const cached = await loadCopy('points.json');
-    if (cached && !/ 40[019]\b/.test(err.message)) {   // 認可切れ(400/401/409)は控えに逃げない
-      try {
-        showData(JSON.parse(cached), true);
-        const rc = await loadCopy('recent.json');   // 最後に読めた直近の点も重ねる (全件との間に隙間があれば使わない)
-        if (rc) { const r = JSON.parse(rc); if (Array.isArray(r.points) && r.since * 1000 <= baseGenerated) applyRecent(r, true); }
-        return;
-      } catch {}
-    }
+    const authLost = / 40[019]\b/.test(err.message);   // 認可切れ(400/401/409)は控えに逃げない
+    if (!copied && !authLost) copied = await showCopy();
+    if (copied && !authLost) { if (had) toast('通信できないので、今の表示のままにします', 4000); return; }   // 通信できない: 描いてある控えのまま
     $('stats').textContent = '読み込めません: ' + err.message;
   }
 }
@@ -679,9 +710,9 @@ function ciApply(d, ops) {
 const ciRefresh = () => setCheckins(ciApply(ciBase, ciQueue));
 
 async function ciFetch() {
-  const r = await fetch('https://content.dropboxapi.com/2/files/download', {
+  const r = await dbx('https://content.dropboxapi.com/2/files/download', {
     method: 'POST', headers: { Authorization: 'Bearer ' + await token(), 'Dropbox-API-Arg': JSON.stringify({ path: CI_PATH }) },
-  });
+  }, DBX_MS.ci);
   if (r.status === 409) {
     const t = await r.text();
     if (t.includes('not_found')) return { data: { places: [], checkins: [] }, rev: null, exists: false };
@@ -696,11 +727,12 @@ async function ciFetch() {
 
 async function ciUpload(data, { rev, exists }) {
   const mode = !exists ? { '.tag': 'add' } : rev ? { '.tag': 'update', update: rev } : { '.tag': 'overwrite' };   // rev を読めなかったときだけ上書き
-  const r = await fetch('https://content.dropboxapi.com/2/files/upload', {
+  // 途中で打ち切っても、サーバ側では書けていることがある。次の回は最新を読み直し、チェックインは id で重複を除くので、二重にはならない
+  const r = await dbx('https://content.dropboxapi.com/2/files/upload', {
     method: 'POST',
     headers: { Authorization: 'Bearer ' + await token(), 'Content-Type': 'application/octet-stream', 'Dropbox-API-Arg': JSON.stringify({ path: CI_PATH, mode, autorename: false, mute: true }) },
     body: JSON.stringify({ updated: Date.now(), ...data }),
-  });
+  }, DBX_MS.ci);
   if (r.ok) return;
   const t = await r.text(), e = new Error('upload ' + r.status + ' ' + t.slice(0, 120));
   e.conflict = /path\/conflict|"conflict"/.test(t);
