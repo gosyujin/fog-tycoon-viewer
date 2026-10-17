@@ -27,7 +27,11 @@ fog-tycoon の外出先用ビューア(静的ページ)。GitHub Pages に置く
 - 地図タイルを端末にキャッシュ(`sw.js`。見たタイルだけを最大3000枚・14日間保存し、2回目以降は通信せずに表示。オフラインでも見たことのある場所は出る)。初期表示は前回の位置から始め、東京や日本全体を経由しない
 - 🔄 (左下) は差分の同期: Tailscale につながった Mac の同期サーバ(fog-tycoon の `scripts/sync-server.mjs`)の `/sync/recent` に依頼し、Mac が直近の分だけ Dawarich から取り直して `recent.json` に書いたら、それを取り込む(1秒前後)。⚙ の「Dawarich と全件で同期」は `/sync`(全件の書き出し、約15秒)のあと `points.json` を読み直す。Dawarich 側で古い点を消したあとすぐ反映したいとき用(1時間ごとの全件でも正される)。同期先の URL(Mac の `tailscale serve` の `https://…ts.net`)は ⚙ に入力し、この端末にだけ保存する。同期サーバが古く `/sync/recent` が無いとき(404)は、その旨を出す
 - 直近の点の自動取り込み(表示中は60秒ごとに Dropbox の `/recent.json` を読み、`points.json` の `since` 以降をその点で置き換えて霧・統計に反映する。GPS は使わない。Mac が60秒ごとに Dawarich から直近の分だけ書く(fog-tycoon の README の「差分エクスポート」)。最後に全件を読み込んだ以降に Dawarich に届いた点は、橙の線でも描く。画面が裏に回ったら止め、戻ったらすぐ読む。`recent.json` の `since` が読み込み済みの `points.json` より新しいとき(全件が書き直された)は全件を読み直す。全件より古い `recent.json` は使わない。霧に関係しないヒートマップのセルと軌跡は、切り替えたときに作り直す。リアルタイム追跡の点は、Dawarich から届いた最後の点より新しい分だけヒートマップに足す)
-- 通信できないときは端末に残した控えを表示
+- 機内モードなど通信できないときも開いて見られる(見るだけ)。
+  - アプリ本体 (`index.html`・`app.js`・`style.css`・`base-map.json`) と CDN の Leaflet は `sw.js` が端末に保存する。通信を先に試し、失敗するか4秒返らなければ保存したものを返す (デプロイ後の更新確認を邪魔しない)。初回はオンラインで一度開いておく。iPhone ではホーム画面に追加したアプリのほうが保存が消えにくい
+  - 軌跡データ (`points.json`・`recent.json`) は最後に読めたものを Cache Storage に控える (localStorage は iOS で約5MB と小さく、点が増えると溢れる)。オフラインで開くとこの控えで霧を描き、「オフライン(控え)」と出す
+  - 地図タイルは見た所だけ (上の `sw.js`)。見ていない所は、タイルより下に敷いた陸地だけの粗い背景 (`base-map.json`: Natural Earth の陸地を間引いたもの、約550KB。海は `#map` の背景色) が出るので、動かす・ズームしても真っ白にはならない。道路・地名は出ない。作り直しは `node tools/build-base-map.mjs ne_10m_land.geojson ne_50m_land.geojson base-map.json`
+  - 控えは ⚙「Dropbox の認可を解除」で消える
 
 ## 注意
 - 履歴・ピンの層 (`recall` / `pins`) は、回る層 (leaflet-rotate の `rotatePane`) の中に作る。`mapPane` の直下に作ると、回らない層 (ポップアップ・ラベル) の上に重なってしまう。

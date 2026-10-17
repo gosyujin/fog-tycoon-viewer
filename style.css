@@ -1,4 +1,5 @@
 html, body, #map { height: 100%; margin: 0; }
+#map { background: #bcd3e6; }   /* 海の色。タイルが出ない所 (オフライン) では、この上に陸地 (base-map.json) だけ描く */
 body { font: 14px/1.4 system-ui, sans-serif; }
 [hidden] { display: none !important; }
 #ui {

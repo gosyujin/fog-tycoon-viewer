@@ -56,6 +56,18 @@ async function finishLogin() {
   LS.set('fog_refresh', j.refresh_token); LS.set('fog_ver', null); LS.set('fog_state', null);
 }
 
+// 通信できないとき (機内モードなど) 用の控え。Cache Storage に置く (localStorage は iOS で約5MB と小さく、点が増えると溢れて控えが黙って消える)。
+// Cache Storage が使えないときだけ、従来どおり localStorage に置く (points.json のみ)。
+const DATA_CACHE = 'fog-data';
+async function saveCopy(name, text) {
+  try { await (await caches.open(DATA_CACHE)).put('data/' + name, new Response(text)); if (name === 'points.json') LS.set('fog_cache', null); }   // 入ったら旧い localStorage の控えは消す
+  catch { if (name === 'points.json') LS.set('fog_cache', text); }
+}
+async function loadCopy(name) {
+  try { const r = await (await caches.open(DATA_CACHE)).match('data/' + name); if (r) return await r.text(); } catch {}
+  return name === 'points.json' ? LS.get('fog_cache') : null;
+}
+
 async function fetchPoints() {
   const r = await fetch('https://content.dropboxapi.com/2/files/download', {
     method: 'POST',
@@ -63,7 +75,7 @@ async function fetchPoints() {
   });
   if (!r.ok) throw new Error('download ' + r.status + ' ' + (await r.text()).slice(0, 120));
   const text = await r.text();
-  LS.set('fog_cache', text);   // 通信できないとき用の控え (入らなければ無視)
+  saveCopy('points.json', text);
   return JSON.parse(text);
 }
 
@@ -75,7 +87,9 @@ async function fetchRecent() {
   });
   if (r.status === 409 && (await r.text()).includes('not_found')) return null;
   if (!r.ok) throw new Error('download ' + r.status);
-  return r.json();
+  const text = await r.text();
+  saveCopy('recent.json', text);
+  return JSON.parse(text);
 }
 
 // ---------- 地図 ----------
@@ -95,7 +109,15 @@ const BufferedTileLayer = L.TileLayer.extend({
 new BufferedTileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '© OpenStreetMap contributors', maxZoom: 19, crossOrigin: true, keepBuffer: 4,
   updateWhenIdle: false, updateInterval: 50, updateWhenZooming: false,
+  errorTileUrl: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',   // 読めなかったタイルは透明 (壊れた画像のアイコンを出さない)
 }).addTo(map);
+
+// オフラインの背景: 陸地 (海岸線) だけの粗い地図 (base-map.json。tools/build-base-map.mjs で作る)。タイルより下に敷くので、タイルが出ている所では見えず、
+// 機内モードなどでタイルが読めない所だけ、陸と海の形が出る (どこまで動かす・ズームしても真っ白にならない)。海の色は #map の背景。
+map.createPane('offlineBase', map.getPane('rotatePane')).style.zIndex = 150;   // タイル (200) より下
+fetch('base-map.json').then((r) => r.json()).then((g) => {
+  L.geoJSON(g, { pane: 'offlineBase', renderer: L.canvas({ pane: 'offlineBase' }), interactive: false, style: { color: '#9aa4ad', weight: 1, fillColor: '#f1efe9', fillOpacity: 1 } }).addTo(map);
+}).catch(() => {});   // 無ければ背景なし (従来どおり)
 
 let all = [], points = [];
 let baseGenerated = 0, recentGen = 0;   // 読み込んだ points.json の generated (ms) / 取り込んだ recent.json の generated
@@ -317,9 +339,14 @@ async function load() {
   try {
     showData(await fetchPoints(), false);
   } catch (err) {
-    const cached = LS.get('fog_cache');
+    const cached = await loadCopy('points.json');
     if (cached && !/ 40[019]\b/.test(err.message)) {   // 認可切れ(400/401/409)は控えに逃げない
-      try { showData(JSON.parse(cached), true); return; } catch {}
+      try {
+        showData(JSON.parse(cached), true);
+        const rc = await loadCopy('recent.json');   // 最後に読めた直近の点も重ねる (全件との間に隙間があれば使わない)
+        if (rc) { const r = JSON.parse(rc); if (Array.isArray(r.points) && r.since * 1000 <= baseGenerated) applyRecent(r, true); }
+        return;
+      } catch {}
     }
     $('stats').textContent = '読み込めません: ' + err.message;
   }
@@ -336,11 +363,15 @@ async function pollRecentOnce() {
   if (!all.length) return false;   // 全件が読めていないうちは重ねない
   const r = await fetchRecent();
   if (!r || !Array.isArray(r.points) || r.generated === recentGen) return false;
-  if (r.since * 1000 > baseGenerated) { showData(await fetchPoints(), false); if (r.generated < baseGenerated) return false; }   // 隙間があるので全件を読み直す
+  if (r.since * 1000 > baseGenerated) showData(await fetchPoints(), false);   // 隙間があるので全件を読み直す
+  return applyRecent(r, false);
+}
+// recent.json の点を取り込む (全件より古いときは使わない)。offline: 保存してあった控えを使うとき (表示に出す)
+function applyRecent(r, offline) {
   if (r.generated < baseGenerated) return false;   // 全件より古い recent.json は使わない
   recentGen = r.generated;
   all = all.filter((p) => p[0] < r.since).concat(r.points);
-  note = ` · 更新 ${new Date(r.generated).toLocaleString('ja-JP')}`;
+  note = ` · 更新 ${new Date(r.generated).toLocaleString('ja-JP')}` + (offline ? ' · オフライン(控え)' : '');
   applyRange(true);
   recentLayer.clearLayers();
   for (const seg of trackSegments(r.points.filter((p) => p[0] * 1000 > baseGenerated))) L.polyline(seg, { color: '#f59e0b', weight: 4, opacity: 0.9, interactive: false }).addTo(recentLayer);
@@ -951,7 +982,7 @@ $('reload').onclick = load;
 $('logout').onclick = () => {
   if (!confirm('この端末の Dropbox 認可と控えを削除しますか?')) return;
   for (const k of ['fog_key', 'fog_refresh', 'fog_ver', 'fog_state', 'fog_cache']) LS.set(k, null);
-  location.reload();
+  Promise.resolve().then(() => caches.delete(DATA_CACHE)).catch(() => {}).finally(() => location.reload());   // 端末に置いた行動履歴の控えも消す
 };
 
 // 現在地 (Geolocation は HTTPS が必要。GitHub Pages なら可)
