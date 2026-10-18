@@ -4,7 +4,7 @@
 //    - 保存済みで新しい (FRESH_MS 以内) ならネットワークに行かずそのまま返す → 表示の待ちをなくす
 //    - 古いタイルは取り直すが、TILE_WAIT_MS 待っても返らない・失敗したら古いものを返す。失敗した直後の TILE_BAD_MS は、古いタイルは取り直さずすぐ返す
 //    - 保存がないタイルは TILE_GIVEUP_MS で諦める (読み込み待ちの接続を溜めない。その下には陸地だけの背景 (base-map.json) が出る)
-//    - MAX_TILES を超えたら古い順に捨てる
+//    - MAX_TILES を超えたら古い順に捨てる (地図の種類に関係なく全体で数える。切り替えても前の地図のタイルは消さず、使わなければ古い順に押し出される)
 // 2. アプリ本体 (index.html・app.js・style.css・背景地図 base-map.json) と CDN の Leaflet
 //    - CDN と ?v=<sha> 付きの URL は中身が変わらないので、保存済みならそのまま返す
 //    - ?v なしの URL (index.html など) は、保存済みならすぐ返して、裏で取り直す (次の起動で新しくなる。最新への切り替えは app.js の更新確認が ?v=<sha> へ移動して行う)
@@ -14,7 +14,8 @@ const CACHE = 'fog-tiles-v1';
 const SHELL = 'fog-shell-v1';
 const MAX_TILES = 3000;           // 1枚 15〜25KB 程度なので数十MB
 const FRESH_MS = 14 * 24 * 3600 * 1000;
-const HOST = 'tile.openstreetmap.org';
+const TILE_HOSTS = ['tile.openstreetmap.org', 'cyberjapandata.gsi.go.jp', 'server.arcgisonline.com'];   // 地図の種類 (app.js の BASEMAPS) のタイル。切り替えても、どれも同じ保存先に URL ごとに入る
+const isTileHost = (h) => TILE_HOSTS.includes(h);
 const TILE_WAIT_MS = 3000, TILE_GIVEUP_MS = 10000, TILE_BAD_MS = 30000;
 const SHELL_WAIT_MS = 4000;
 const SHELL_FILES = ['./', 'index.html', 'style.css', 'app.js', 'build-info.js', 'base-map.json', 'icons/favicon-48.png', 'icons/apple-touch-icon.png'];
@@ -111,7 +112,7 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  if (url.hostname === HOST) e.respondWith(tile(req));
+  if (isTileHost(url.hostname)) e.respondWith(tile(req));
   else if (CDN_FILES.includes(req.url)) e.respondWith(cdn(req));
   else if (url.origin === location.origin && !url.searchParams.has('nc')) e.respondWith(shell(e));   // nc: 更新確認 (build-info.js?nc=…) は毎回新しく取る
 });

@@ -120,11 +120,29 @@ const BufferedTileLayer = L.TileLayer.extend({
 });
 // crossOrigin: Service Worker (sw.js) がタイルを CORS の応答として保存するため。keepBuffer: 動かした後に戻っても再読み込みしない。
 // updateWhenIdle: false + updateInterval: 動かしている最中も読み込む。updateWhenZooming: ピンチ中は読み込まず、止まってから読む (途中のズームの無駄な読み込みを避ける)
-new BufferedTileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution: '© OpenStreetMap contributors', maxZoom: 19, crossOrigin: true, keepBuffer: 4,
-  updateWhenIdle: false, updateInterval: 50, updateWhenZooming: false,
-  errorTileUrl: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',   // 読めなかったタイルは透明 (壊れた画像のアイコンを出さない)
-}).addTo(map);
+// 地図の種類 (⚙ で選ぶ)。どれも API キー不要 (CARTO は無料でもキーが要るので入れていない)。タイルの保存 (sw.js) は URL ごとなので、別の地図に替えても前の地図の保存分は残る。
+// 表示するときは各社のクレジット (attribution) を画面下に出す。
+const BASEMAPS = {
+  osm: { name: 'OpenStreetMap (標準)', url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', attribution: '© OpenStreetMap contributors', maxZoom: 19 },
+  gsi: { name: '地理院 淡色 (日本のみ)', url: 'https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png', attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">地理院タイル</a>', maxZoom: 18 },
+  esri: { name: 'Esri ストリート (カラー)', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', attribution: 'Tiles © Esri', maxZoom: 19 },
+  esriGray: { name: 'Esri グレー (淡い)', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', attribution: 'Tiles © Esri', maxNativeZoom: 16, maxZoom: 19 },
+};
+let baseLayer = null;
+function setBasemap(id) {
+  const def = BASEMAPS[id] || BASEMAPS.osm;
+  if (baseLayer) map.removeLayer(baseLayer);   // 画面下のクレジットも、外した地図のぶんが消えて新しい地図のぶんになる
+  const { name, url, ...opts } = def;
+  baseLayer = new BufferedTileLayer(url, {
+    ...opts, crossOrigin: true, keepBuffer: 4,
+    updateWhenIdle: false, updateInterval: 50, updateWhenZooming: false,
+    errorTileUrl: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',   // 読めなかったタイルは透明 (壊れた画像のアイコンを出さない)
+  }).addTo(map);
+  if (map.getZoom() > def.maxZoom) map.setZoom(def.maxZoom);
+}
+for (const [id, d] of Object.entries(BASEMAPS)) $('basemap').add(new Option(d.name, id));
+try { var savedBase = (JSON.parse(LS.get('fog_settings') || '{}') || {}).basemap; } catch {}
+setBasemap(savedBase);
 
 // オフラインの背景: 陸地 (海岸線) だけの粗い地図 (base-map.json。tools/build-base-map.mjs で作る)。タイルより下に敷くので、タイルが出ている所では見えず、
 // 機内モードなどでタイルが読めない所だけ、陸と海の形が出る (どこまで動かす・ズームしても真っ白にならない)。海の色は #map の背景。
@@ -460,7 +478,7 @@ const ONE_FINGER_DIR = 1, ONE_FINGER_PX_PER_ZOOM = 90, DOUBLE_TAP_MS = 300, DOUB
 })();
 
 // ---------- 設定の保存・復元 (この端末の localStorage) ----------
-const SETTING_IDS = ['fog', 'tracks', 'radius', 'density', 'range'];
+const SETTING_IDS = ['fog', 'tracks', 'radius', 'density', 'range', 'basemap'];
 function saveSettings() {
   const v = {};
   for (const id of SETTING_IDS) v[id] = $(id).type === 'checkbox' ? $(id).checked : $(id).value;
@@ -488,6 +506,7 @@ $('tracks').onchange = (e) => { saveSettings(); if (e.target.checked) { if (trac
 $('radius').oninput = (e) => { $('rv').textContent = e.target.value; saveSettings(); if ($('fog').checked) fog.redraw(); };
 $('density').oninput = (e) => { $('dv').textContent = e.target.value; saveSettings(); if ($('fog').checked) fog.redraw(); };
 $('range').onchange = () => { saveSettings(); applyRange(); };
+$('basemap').onchange = (e) => { saveSettings(); setBasemap(e.target.value); };
 const syncLegend = () => { $('legend').hidden = !(mode === 'heat' && $('fog').checked); };
 function setMode(m) {
   mode = m;

@@ -68,6 +68,7 @@ body { font: 14px/1.4 system-ui, sans-serif; }
   border-radius: 8px; display: grid; gap: 6px; width: 220px;
 }
 #panel input[type=range] { width: 100%; }
+#panel select { max-width: 100%; }
 #panel button { font: inherit; }
 #stats { font-size: 12px; opacity: .8; }
 .fog-canvas { pointer-events: none; }
