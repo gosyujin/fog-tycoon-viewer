@@ -156,3 +156,6 @@ body { font: 14px/1.4 system-ui, sans-serif; }
 #ciSheet.typing { grid-template-columns: 1fr 1fr; }
 #ciSheet.typing > * { grid-column: 1 / -1; }
 #ciSheet.typing > #ciWhere, #ciSheet.typing > #ciNote { grid-column: auto; }
+
+/* ヒートマップ表示中は地図を白黒にして淡くし、色付きの熱を目立たせる */
+#map.heat .leaflet-tile-pane { filter: grayscale(1) contrast(0.7) brightness(1.15); }
