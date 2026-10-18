@@ -157,5 +157,5 @@ body { font: 14px/1.4 system-ui, sans-serif; }
 #ciSheet.typing > * { grid-column: 1 / -1; }
 #ciSheet.typing > #ciWhere, #ciSheet.typing > #ciNote { grid-column: auto; }
 
-/* ヒートマップ表示中は地図を白黒にして淡くし、色付きの熱を目立たせる */
-#map.heat .leaflet-tile-pane { filter: grayscale(1) contrast(0.7) brightness(1.15); }
+/* ヒートマップ表示中は地図の彩度を落として淡くし (公園の緑・水の青は残す)、暖色のヒートを目立たせる */
+#map.heat .leaflet-tile-pane { filter: saturate(0.5) contrast(0.8) brightness(1.08); }

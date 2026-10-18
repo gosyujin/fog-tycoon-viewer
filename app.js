@@ -146,7 +146,7 @@ const INTERP_SEC = 10 * 60, INTERP_M = 120;   // この範囲を超えて離れ�
 const mask = document.createElement('canvas'), mctx = mask.getContext('2d', { willReadFrequently: true });
 
 // ヒートマップの色: 訪問日数ごとの基準色 [この日数以上, 色]。凡例 (#legend) と揃える。間の輝度は色を補間してなめらかにつなぐ
-const HEAT_STEPS = [[1, [59, 130, 246]], [2, [34, 197, 94]], [4, [250, 204, 21]], [10, [239, 68, 68]]];
+const HEAT_STEPS = [[1, [252, 185, 0]], [2, [249, 115, 22]], [4, [220, 38, 38]], [10, [157, 23, 77]]];
 const HEAT_ALPHA = 0.8, HEAT_FEATHER = [0.03, 0.6];   // 色が付く縁は 1日の輝度の 3%→60% で透明→不透明に立ち上げてぼかす
 // 各セルの輝度の落ち方 [半径比, 中心比]。ガウス分布のように中心から外へゆるやかに減らす (縁を硬い円にしない)
 const HEAT_PROFILE = [[0, 1], [0.15, 0.97], [0.3, 0.85], [0.5, 0.55], [0.7, 0.25], [0.85, 0.08], [1, 0]];
@@ -493,7 +493,7 @@ $('range').onchange = () => { saveSettings(); applyRange(); };
 const syncLegend = () => {
   const heat = mode === 'heat' && $('fog').checked;
   $('legend').hidden = !heat;
-  $('map').classList.toggle('heat', heat);   // ヒートマップの色が地図に負けないよう、下の地図を無彩色・低コントラストにする
+  $('map').classList.toggle('heat', heat);   // ヒートマップが地図に負けないよう、下の地図は彩度とコントラストを落とす
 };
 function setMode(m) {
   mode = m;
