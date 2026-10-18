@@ -146,8 +146,8 @@ const INTERP_SEC = 10 * 60, INTERP_M = 120;   // この範囲を超えて離れ�
 const mask = document.createElement('canvas'), mctx = mask.getContext('2d', { willReadFrequently: true });
 
 // ヒートマップの色: 訪問日数ごとの基準色 [この日数以上, 色]。凡例 (#legend) と揃える。間の輝度は色を補間してなめらかにつなぐ
-const HEAT_STEPS = [[1, [252, 185, 0]], [2, [249, 115, 22]], [4, [220, 38, 38]], [10, [157, 23, 77]]];
-const HEAT_ALPHA = 0.8, HEAT_FEATHER = [0.03, 0.6];   // 色が付く縁は 1日の輝度の 3%→60% で透明→不透明に立ち上げてぼかす
+const HEAT_STEPS = [[1, [59, 130, 246]], [2, [34, 197, 94]], [4, [250, 204, 21]], [10, [239, 68, 68]]];
+const HEAT_ALPHA = 0.6, HEAT_FEATHER = [0.03, 0.6];   // 色が付く縁は 1日の輝度の 3%→60% で透明→不透明に立ち上げてぼかす
 // 各セルの輝度の落ち方 [半径比, 中心比]。ガウス分布のように中心から外へゆるやかに減らす (縁を硬い円にしない)
 const HEAT_PROFILE = [[0, 1], [0.15, 0.97], [0.3, 0.85], [0.5, 0.55], [0.7, 0.25], [0.85, 0.08], [1, 0]];
 const heatAt = (t) => {   // 山の高さ: 中心からの距離 (半径比 t) → 0..1。HEAT_PROFILE を線形補間
@@ -237,15 +237,12 @@ const Fog = L.Layer.extend({
     c.style.width = size.x + 'px'; c.style.height = size.y + 'px';
     const g = c.getContext('2d');
     g.scale(dpr, dpr);
-    if (mode === 'fog') {
-      g.fillStyle = `rgba(8, 10, 16, ${+$('density').value / 100})`;
-      g.fillRect(0, 0, size.x, size.y);
-    }
+    g.fillStyle = `rgba(8, 10, 16, ${+$('density').value / 100})`;
+    g.fillRect(0, 0, size.x, size.y);
     g.globalCompositeOperation = 'destination-out';
     const mpp = 40075016.686 * Math.cos(m.getCenter().lat * Math.PI / 180) / (256 * 2 ** m.getZoom());
     const r = Math.max(3, +$('radius').value / mpp);
     const b = m.getBounds().pad(r * mpp / 111000 + 0.01);
-    if (mode === 'heat') return this._heat(g, m, size, r, b, o);
     const step = Math.max(1, r / 3), seen = new Set();   // 近接点は同じピクセルセルに丸めて描画を減らす
     for (const [, lat, lon] of points.concat(live)) {
       if (!b.contains([lat, lon])) continue;
@@ -260,10 +257,11 @@ const Fog = L.Layer.extend({
       g.fillStyle = grad;
       g.beginPath(); g.arc(p.x, p.y, r, 0, Math.PI * 2); g.fill();
     }
+    if (mode === 'heat') this._heat(g, m, size, r, b, o);   // 晴れた所の上に、訪問日数の色を重ねる
   },
   // ヒートマップ: 低解像度の格子に、各セルの訪問日数を重みにした山 (HEAT_PROFILE) を足し合わせて密度を作り、色に変換して重ねる。
   // セルごとの最大値ではなく足し合わせなので、日数の違うセルが隣り合っても色がなめらかにつながる。
-  // 1日だけ通った道の中心が「1日」になるよう、道に沿ってセルが並んだときの合計 (HEAT_LINE_SUM) で割る。霧は出さない。
+  // 1日だけ通った道の中心が「1日」になるよう、道に沿ってセルが並んだときの合計 (HEAT_LINE_SUM) で割る。霧 (晴れた所) の上に重ねるので、霧の濃さ・晴れ半径は霧モードと共通。
   // リアルタイム追跡の点は「今日1日分」として扱う
   _heat(g, m, size, r, b, o) {
     const w = Math.ceil(size.x), h = Math.ceil(size.y);
@@ -490,11 +488,7 @@ $('tracks').onchange = (e) => { saveSettings(); if (e.target.checked) { if (trac
 $('radius').oninput = (e) => { $('rv').textContent = e.target.value; saveSettings(); if ($('fog').checked) fog.redraw(); };
 $('density').oninput = (e) => { $('dv').textContent = e.target.value; saveSettings(); if ($('fog').checked) fog.redraw(); };
 $('range').onchange = () => { saveSettings(); applyRange(); };
-const syncLegend = () => {
-  const heat = mode === 'heat' && $('fog').checked;
-  $('legend').hidden = !heat;
-  $('map').classList.toggle('heat', heat);   // ヒートマップが地図に負けないよう、下の地図は彩度とコントラストを落とす
-};
+const syncLegend = () => { $('legend').hidden = !(mode === 'heat' && $('fog').checked); };
 function setMode(m) {
   mode = m;
   const heat = m === 'heat';
