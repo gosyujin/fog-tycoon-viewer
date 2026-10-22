@@ -627,7 +627,7 @@ map.on('click', (e) => { if (recallOn) recallShow(e.latlng); });
 
 // ---- チェックイン (表示): { places: [{id, name, lat, lon}], checkins: [{id, t, place, lat, lon, note}] } ----
 // 場所 (places) は名前と代表座標。チェックインは「いつ、どの場所に」。viewer が Dropbox の /checkins.json に書き、本体は data/checkins.json を読むだけ。
-let ci = { places: [], checkins: [] }, ciRemove = null;   // ciRemove: 削除できる viewer だけが関数を入れる
+let ci = { places: [], checkins: [] }, ciRemove = null, ciEdit = null;   // ciRemove・ciEdit: 削除・編集できる viewer だけが関数を入れる
 const placeOf = (id) => ci.places.find((p) => p.id === id);
 const pinPref = {
   get() { try { return localStorage.getItem('fog_pins'); } catch { return null; } },
@@ -638,29 +638,97 @@ const pinRenderer = L.canvas({ pane: 'pins', tolerance: 10 });   // 指で押し
 const pinLayer = L.layerGroup();
 const dayText = (ts) => new Date(ts * 1000).toLocaleDateString('ja-JP', { year: 'numeric', month: 'numeric', day: 'numeric', weekday: 'short' });
 
-function pinPopup(p, list) {
-  const box = document.createElement('div'), head = document.createElement('strong'), ul = document.createElement('ul');
-  box.className = 'pin-pop'; head.textContent = `${p.name} (${list.length}回)`;
+const ICONS = {
+  pen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+  del: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>',
+};
+// ボタンの click は地図まで伝えない: 押した拍子にポップアップの中身を差し替えるので、ボタンが外れたあとの click を Leaflet が「地図のクリック」と見て、ポップアップを閉じてしまう
+function iconBtn(kind, label, onclick) {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'ic ' + kind; b.title = label; b.setAttribute('aria-label', label); b.innerHTML = ICONS[kind]; b.onclick = (e) => { e.stopPropagation(); onclick(); };
+  return b;
+}
+function textBtn(label, cls, onclick) {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = cls; b.textContent = label; b.onclick = (e) => { e.stopPropagation(); onclick(); };
+  return b;
+}
+// 編集欄 (場所名 / 1件の日時とメモ) の共通部分: 入力欄と「保存」「取消」を並べる
+function editForm(cls, inputs, onSave, onCancel) {
+  const f = document.createElement('div'), row = document.createElement('div');
+  f.className = cls; row.className = 'btns';
+  row.append(textBtn('保存', 'save', onSave), textBtn('取消', 'cancel', onCancel));
+  f.append(...inputs, row);
+  return f;
+}
+
+// ポップアップ。通常は「日付 メモ」、「編集」を押すと各行に鉛筆 (日時・メモを直す) とゴミ箱が出て、見出しの鉛筆で場所名を直せる。
+// 日付の列とメモの列を分けるので、メモが長いときは日付の下にもぐらず、メモの列の中で折り返す
+function pinPopup(p, list, editing) {
+  const box = document.createElement('div'), head = document.createElement('div'), title = document.createElement('strong'), ul = document.createElement('ul');
+  box.className = 'pin-pop'; head.className = 'pin-head'; ul.className = editing ? 'editing' : '';
+  const again = () => openPin(p.id, editing);
+  title.textContent = editing ? p.name : `${p.name} (${list.length}回)`;   // 編集中は削除で回数が変わるので出さない
+  head.append(title);
+  if (editing) {
+    head.append(iconBtn('pen', '場所名を編集', () => {
+      const inp = document.createElement('input');
+      inp.value = p.name; inp.setAttribute('aria-label', '場所名'); inp.enterKeyHint = 'done';
+      const save = () => {
+        const name = inp.value.trim();
+        if (!name) { inp.focus(); return; }
+        if (name !== p.name) ciEdit({ op: 'rename', id: p.id, name });
+        openPin(p.id, true);
+      };
+      inp.onkeydown = (e) => { if (e.key === 'Enter') save(); };
+      head.replaceChildren(editForm('pin-form name', [inp], save, again));
+      inp.focus();
+    }));
+  }
   for (const k of list.slice(0, 12)) {
-    const li = document.createElement('li'), s = document.createElement('span');
-    s.textContent = `${dayText(k.t)} ${hm(k.t)}${k.note ? ` ${k.note}` : ''}`;
-    li.append(s);
-    if (ciRemove) {   // 削除は「編集」を押すまで出さない (うっかり押さない)
-      const b = document.createElement('button');
-      b.type = 'button'; b.className = 'del'; b.textContent = '削除'; b.onclick = () => { map.closePopup(); ciRemove(k.id); };
-      li.append(b);
+    const li = document.createElement('li'), when = document.createElement('span'), memo = document.createElement('span');
+    when.className = 'when'; when.textContent = `${dayText(k.t)} ${hm(k.t)}`;
+    memo.className = 'memo'; memo.textContent = k.note || '';
+    li.append(when, memo);
+    if (editing) {
+      const acts = document.createElement('span');
+      acts.className = 'acts';
+      acts.append(
+        iconBtn('pen', '日時・メモを編集', () => {
+          const t = document.createElement('input'), n = document.createElement('input');
+          t.type = 'datetime-local'; t.value = localInput(k.t); t.setAttribute('aria-label', 'チェックイン日時');
+          n.value = k.note || ''; n.placeholder = 'メモ (任意)'; n.setAttribute('aria-label', 'メモ'); n.enterKeyHint = 'done';
+          const save = () => {
+            const nt = t.value && t.value !== localInput(k.t) ? Math.floor(new Date(t.value).getTime() / 1000) : k.t;   // 日時欄を触っていなければ元の秒を残す
+            if (!isFinite(nt)) { toast('日時を確認してください'); return; }
+            const note = n.value.trim();
+            if (nt !== k.t || note !== (k.note || '')) ciEdit({ op: 'edit', id: k.id, t: nt, note });
+            openPin(p.id, true);
+          };
+          n.onkeydown = (e) => { if (e.key === 'Enter') save(); };
+          li.className = 'ed';
+          li.replaceChildren(editForm('pin-form', [t, n], save, again));
+        }),
+        iconBtn('del', '削除', () => { if (ciRemove(k.id)) openPin(p.id, true); }),
+      );
+      li.append(acts);
     }
     ul.append(li);
   }
-  if (list.length > 12) { const li = document.createElement('li'); li.textContent = `ほか ${list.length - 12} 回`; ul.append(li); }
+  if (list.length > 12) { const li = document.createElement('li'); li.className = 'more'; li.textContent = `ほか ${list.length - 12} 回`; ul.append(li); }
   box.append(head, ul);
-  if (ciRemove) {
-    const ed = document.createElement('button');
-    ed.type = 'button'; ed.className = 'edit'; ed.textContent = '編集';
-    ed.onclick = () => { const on = box.classList.toggle('editing'); ed.textContent = on ? '完了' : '編集'; };
-    box.append(ed);
-  }
+  if (ciRemove) box.append(textBtn(editing ? '完了' : '編集', 'edit', () => openPin(p.id, !editing)));   // 編集・削除できる viewer だけ。うっかり押さないよう、既定では鉛筆もゴミ箱も出さない
   return box;
+}
+
+// 場所 pid のポップアップを開く (開いていれば中身だけ差し替える)。チェックインが無くなっていたら閉じる
+let pinPop = null;
+function openPin(pid, editing) {
+  const p = placeOf(pid), list = ci.checkins.filter((k) => k.place === pid).sort((a, b) => b.t - a.t);
+  if (!p || !list.length) { map.closePopup(); return; }
+  const box = pinPopup(p, list, editing);
+  if (pinPop && pinPop.isOpen() && pinPop._pid === pid) pinPop.setContent(box);
+  else { pinPop = L.popup({ maxWidth: 320 }).setLatLng([p.lat, p.lon]).setContent(box).openOn(map); pinPop._pid = pid; }
 }
 
 function drawPins() {
@@ -673,7 +741,7 @@ function drawPins() {
     list.sort((a, b) => b.t - a.t);
     const m = L.circleMarker([p.lat, p.lon], { pane: 'pins', renderer: pinRenderer, radius: 8, color: '#fff', weight: 2, fillColor: '#7c3aed', fillOpacity: 1, bubblingMouseEvents: false });
     m.bindTooltip(p.name, { permanent: true, direction: 'right', offset: [8, 0], className: 'pin-label' });
-    m.on('click', () => L.popup({ maxWidth: 280 }).setLatLng([p.lat, p.lon]).setContent(pinPopup(p, list)).openOn(map));
+    m.on('click', () => openPin(p.id, false));
     m.addTo(pinLayer);
   }
 }
@@ -705,7 +773,7 @@ function recallCheckins(c, r) {
 
 // ---- チェックイン (記録): Dropbox の /checkins.json に書く (viewer だけ) ----
 // 操作 (ops) をいったん端末のキューに積み、通信できるとき Dropbox の最新を読み直して適用し、rev つきで書き戻す。
-// 圏外でも押せる。他の端末が先に書いていたら (競合) 読み直してやり直す。ops: { op: 'add', checkin, place|null } / { op: 'del', id }
+// 圏外でも押せる。他の端末が先に書いていたら (競合) 読み直してやり直す。ops: { op: 'add', checkin, place|null } / { op: 'del', id } / { op: 'edit', id, t, note } / { op: 'rename', id, name }
 const CI_PATH = '/checkins.json', CI_QUEUE = 'fog_ci_queue', CI_CACHE = 'fog_ci_cache', CI_NEAR_M = 100, CI_SAME_M = 300;
 let ciBase = { places: [], checkins: [] }, ciQueue = [], ciBusy = false;   // ciBase: Dropbox にある最後に読めた内容
 try { ciQueue = JSON.parse(LS.get(CI_QUEUE) || '[]') || []; } catch {}
@@ -720,6 +788,12 @@ function ciApply(d, ops) {
     } else if (o.op === 'del') {
       const i = checkins.findIndex((c) => c.id === o.id);
       if (i >= 0) checkins.splice(i, 1);
+    } else if (o.op === 'edit') {
+      const i = checkins.findIndex((c) => c.id === o.id);
+      if (i >= 0) { const c = { ...checkins[i], t: o.t }; if (o.note) c.note = o.note; else delete c.note; checkins[i] = c; }   // 読み込んだ配列の中身は書き換えず、差し替える
+    } else if (o.op === 'rename') {
+      const i = places.findIndex((p) => p.id === o.id);
+      if (i >= 0) places[i] = { ...places[i], name: o.name };
     }
   }
   return { places, checkins };
@@ -773,6 +847,7 @@ async function ciFlush(loud) {
       try { await ciUpload(merged, cur); } catch (e) { if (e.conflict) continue; throw e; }
       ciBase = merged; ciQueue = ciQueue.slice(sent); ciSaveQueue(); LS.set(CI_CACHE, JSON.stringify(ciBase)); ciRefresh();
       if (loud) toast('チェックインを Dropbox に保存しました');
+      if (ciQueue.length) { ciBusy = false; return await ciFlush(loud); }   // 送っている間に積まれた分 (続けて直したとき)
       return;
     }
     throw new Error('他の端末の書き込みと競合が続きました');
@@ -791,10 +866,12 @@ function ciStart() {
 addEventListener('online', () => ciSync(false));
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') ciSync(false); });
 
-ciRemove = (id) => {
-  if (!confirm('このチェックインを削除しますか?')) return;
+ciRemove = (id) => {   // 削除したら true (ポップアップを描き直す目印)
+  if (!confirm('このチェックインを削除しますか?')) return false;
   ciQueue.push({ op: 'del', id }); ciSaveQueue(); ciRefresh(); ciFlush(true);
+  return true;
 };
+ciEdit = (op) => { ciQueue.push(op); ciSaveQueue(); ciRefresh(); ciFlush(true); };
 
 // ---- チェックインのシート: 位置 (現在地 / 地図をタップ) と名前・時刻・メモ ----
 let ciPos = null, ciPicking = false;

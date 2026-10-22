@@ -114,10 +114,24 @@ body { font: 14px/1.4 system-ui, sans-serif; }
 .pin-label { display: none; background: rgba(20, 24, 33, .88); color: #eee; border: 0; box-shadow: none; font-size: 12px; padding: 1px 6px; }
 .pin-label::before { display: none; }
 .pin-labels .pin-label { display: block; }
+.pin-pop .pin-head { display: flex; align-items: center; gap: 2px; }
+.pin-pop strong { overflow-wrap: anywhere; }
 .pin-pop ul { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 3px; font-size: 12px; }
-.pin-pop li { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.pin-pop .del { display: none; border: 0; background: none; color: #c00; cursor: pointer; font: inherit; padding: 2px 4px; }
-.pin-pop.editing .del { display: inline-block; }
+.pin-pop li { display: grid; grid-template-columns: auto 1fr; align-items: start; column-gap: 8px; }   /* 日付の列 | メモの列 (メモは列の中で折り返す) */
+.pin-pop ul.editing li { grid-template-columns: auto 1fr auto; }   /* 編集中は右に 鉛筆 | ゴミ箱 */
+.pin-pop li.more, .pin-pop li.ed { display: block; }
+.pin-pop .when { white-space: nowrap; }
+.pin-pop .memo { overflow-wrap: anywhere; }
+.pin-pop .acts { display: flex; margin: -3px 0; }
+.pin-pop .ic { border: 0; background: none; color: #667; cursor: pointer; padding: 4px; line-height: 0; }
+.pin-pop .ic.del { color: #c00; }
+.pin-pop .ic svg { width: 16px; height: 16px; display: block; }
+.pin-pop .pin-form { display: grid; gap: 4px; margin: 2px 0 4px; }
+.pin-pop .pin-form.name { flex: 1; margin: 0; }
+.pin-pop .pin-form input { box-sizing: border-box; width: 100%; font: inherit; font-size: 16px; padding: 5px 6px; border: 1px solid #bbb; border-radius: 6px; }   /* 16px: iOS が入力でページを拡大しない */
+.pin-pop .btns { display: flex; gap: 6px; }
+.pin-pop .btns button { font: inherit; font-size: 12px; padding: 4px 12px; border-radius: 6px; border: 1px solid #bbb; background: none; color: inherit; cursor: pointer; }
+.pin-pop .btns .save { background: #2563eb; border-color: #2563eb; color: #fff; }
 .pin-pop .edit { margin-top: 6px; border: 0; background: none; color: #667; cursor: pointer; font: inherit; font-size: 12px; padding: 2px 0; }
 #rcList .rc-ci { color: #c4b5fd; opacity: 1; }
 
