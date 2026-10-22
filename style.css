@@ -113,7 +113,9 @@ body { font: 14px/1.4 system-ui, sans-serif; }
 #pinBtn.on { background: #7c3aed; color: #fff; }
 .pin-label { display: none; background: rgba(20, 24, 33, .88); color: #eee; border: 0; box-shadow: none; font-size: 12px; padding: 1px 6px; }
 .pin-label::before { display: none; }
+.leaflet-tooltip.pin-label { margin: 0; }   /* 矢印用の余白 (±6px) を消す。置き場所は app.js の layoutPinLabels で計算する */
 .pin-labels .pin-label { display: block; }
+.pin-labels .pin-label.pin-label-off { visibility: hidden; }   /* 場所が無いときは隠す (大きさは測れるよう display は残す) */
 .pin-pop .pin-head { display: flex; align-items: center; gap: 2px; }
 .pin-pop strong { overflow-wrap: anywhere; }
 .pin-pop ul { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 3px; font-size: 12px; }

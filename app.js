@@ -731,32 +731,70 @@ function openPin(pid, editing) {
   else { pinPop = L.popup({ maxWidth: 320 }).setLatLng([p.lat, p.lon]).setContent(box).openOn(map); pinPop._pid = pid; }
 }
 
+const PIN_R = 8;
+let pinMarks = [];   // 名前の置き場所を決めるための控え: { m: マーカー, n: チェックイン数, name }
 function drawPins() {
-  pinLayer.clearLayers();
+  pinLayer.clearLayers(); pinMarks = [];
   const byPlace = new Map();
   for (const k of ci.checkins) { if (!byPlace.has(k.place)) byPlace.set(k.place, []); byPlace.get(k.place).push(k); }
   for (const p of ci.places) {
     const list = byPlace.get(p.id);
     if (!list) continue;   // チェックインが全部消えた場所は出さない
     list.sort((a, b) => b.t - a.t);
-    const m = L.circleMarker([p.lat, p.lon], { pane: 'pins', renderer: pinRenderer, radius: 8, color: '#fff', weight: 2, fillColor: '#7c3aed', fillOpacity: 1, bubblingMouseEvents: false });
+    const m = L.circleMarker([p.lat, p.lon], { pane: 'pins', renderer: pinRenderer, radius: PIN_R, color: '#fff', weight: 2, fillColor: '#7c3aed', fillOpacity: 1, bubblingMouseEvents: false });
     m.bindTooltip(p.name, { permanent: true, direction: 'right', offset: [8, 0], className: 'pin-label' });
     m.on('click', () => openPin(p.id, false));
     m.addTo(pinLayer);
+    pinMarks.push({ m, n: list.length, name: p.name });
   }
+  layoutPinLabels();
 }
+
+// 名前の置き場所の候補: [Leaflet の direction, 縦のずらし (名前の高さの半分の何倍か)]。右が既定で、他のピン・名前に重なるなら順に試す
+const LABEL_SLOTS = [['right', 0], ['left', 0], ['top', 0], ['bottom', 0], ['right', -1], ['right', 1], ['left', -1], ['left', 1]];
+const slotOffset = (dir, f, h) => dir === 'top' ? [0, -8] : dir === 'bottom' ? [0, 8] : [dir === 'left' ? -8 : 8, f * (h / 2 + 2)];
+const labelRect = (dir, x, y, w, h, ox, oy) => dir === 'right' ? { x: x + ox, y: y - h / 2 + oy, w, h }
+  : dir === 'left' ? { x: x - w + ox, y: y - h / 2 + oy, w, h }
+  : dir === 'top' ? { x: x - w / 2 + ox, y: y - h + oy, w, h }
+  : { x: x - w / 2 + ox, y: y + oy, w, h };
+const rectHit = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+// チェックインの多い場所から順に、他の名前とどのピンにも重ならない置き場所を選ぶ。どこにも置けなければその名前は隠す (ピンを押せば出る)。
+// 画面上の位置で決めるので、ズームや地図の回転のたびにやり直す。地図の表示範囲には依らないので、動かしてもちらつかない
+let labelRaf = 0;
+function layoutPinLabels() {
+  if (!map.hasLayer(pinLayer) || !map.getContainer().classList.contains('pin-labels')) return;   // 名前が出ていないときは大きさも測れない
+  const items = pinMarks.filter((k) => k.m.getTooltip() && k.m.getTooltip().getElement()).sort((a, b) => b.n - a.n || (a.name < b.name ? -1 : 1));
+  const pts = items.map((k) => map.latLngToContainerPoint(k.m.getLatLng()));
+  const pins = pts.map((q) => ({ x: q.x - PIN_R - 2, y: q.y - PIN_R - 2, w: 2 * PIN_R + 4, h: 2 * PIN_R + 4 })), placed = [];
+  items.forEach((k, i) => {
+    const tip = k.m.getTooltip(), el = tip.getElement(), w = el.offsetWidth + 2, h = el.offsetHeight + 2, q = pts[i];
+    const free = (r) => !placed.some((o) => rectHit(r, o)) && !pins.some((o, j) => j !== i && rectHit(r, o));
+    let pick = null;
+    for (const [dir, f] of LABEL_SLOTS) {
+      const [ox, oy] = slotOffset(dir, f, h), r = labelRect(dir, q.x, q.y, w, h, ox, oy);
+      if (free(r)) { pick = { dir, ox, oy, r }; break; }
+    }
+    const use = pick || { dir: 'right', ox: 8, oy: 0 };
+    tip.options.direction = use.dir; tip.options.offset = L.point(use.ox, use.oy); tip.update();
+    el.classList.toggle('pin-label-off', !pick);
+    if (pick) placed.push(pick.r);
+  });
+}
+const layoutPinLabelsSoon = () => { if (!labelRaf) labelRaf = requestAnimationFrame(() => { labelRaf = 0; layoutPinLabels(); }); };
 function setCheckins(d) { ci = { places: d.places || [], checkins: d.checkins || [] }; drawPins(); }
 
 function setPins(on) {
   on ? pinLayer.addTo(map) : map.removeLayer(pinLayer);
+  if (on) layoutPinLabels();
   $('pinBtn').classList.toggle('on', on);
   $('pinBtn').setAttribute('aria-pressed', on);
   pinPref.set(on ? '1' : '0');
 }
 $('pinBtn').onclick = () => setPins(!map.hasLayer(pinLayer));
 setPins(pinPref.get() !== '0');
-const syncPinLabels = () => map.getContainer().classList.toggle('pin-labels', map.getZoom() >= 15);   // 名前は寄ったときだけ (引きだと重なる)
+const syncPinLabels = () => { map.getContainer().classList.toggle('pin-labels', map.getZoom() >= 15); layoutPinLabels(); };   // 名前は寄ったときだけ (引きだと重なる)
 map.on('zoomend', syncPinLabels); syncPinLabels();
+map.on('rotate', layoutPinLabelsSoon);   // コンパスで回ると、ピン同士の画面上の並びが変わる
 
 // 半径内のチェックイン: 日番号 → [チェックイン]
 function recallCheckins(c, r) {
