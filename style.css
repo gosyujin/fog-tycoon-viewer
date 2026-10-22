@@ -115,6 +115,7 @@ body { font: 14px/1.4 system-ui, sans-serif; }
 .pin-label::before { display: none; }
 .leaflet-tooltip.pin-label { margin: 0; }   /* 矢印用の余白 (±6px) を消す。置き場所は app.js の layoutPinLabels で計算する */
 .pin-labels .pin-label { display: block; }
+.me-dot { box-sizing: border-box; border-radius: 50%; background: #2563eb; border: 2px solid #fff; }   /* 現在地。名前・ピンより上 (mePane) */
 .pin-labels .pin-label.pin-label-off { visibility: hidden; }   /* 場所が無いときは隠す (大きさは測れるよう display は残す) */
 .pin-pop .pin-head { display: flex; align-items: center; gap: 2px; }
 .pin-pop strong { overflow-wrap: anywhere; }

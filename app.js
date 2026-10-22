@@ -1150,6 +1150,9 @@ $('logout').onclick = () => {
 };
 
 // 現在地 (Geolocation は HTTPS が必要。GitHub Pages なら可)
+// 現在地の点は、ピン (460) だけでなくチェックインの名前 (tooltipPane=650) より上に置く。名前は回らない層にあるので、回る層の中の canvas では上に出せない
+map.createPane('mePane', map.getPane('norotatePane') || map.getPane('mapPane')).style.zIndex = 655;
+const meIcon = L.divIcon({ className: 'me-dot', iconSize: [14, 14] });
 const me = L.layerGroup().addTo(map);
 let quietLocate = false;   // 起動時の自動取得は失敗してもパネルを開かない
 // 起動時の現在地合わせ: iOS は起動直後の1回取得が失敗しやすいので、連続測位 (watch) で最初の1点が取れるまで待つ。
@@ -1199,7 +1202,7 @@ map.on('locationfound', (e) => {
   fitted = true;   // 現在地に合わせたので、データ読み込み時の全体表示で上書きしない
   me.clearLayers();
   L.circle(e.latlng, { radius: e.accuracy, color: '#2563eb', weight: 1, fillOpacity: 0.12, interactive: false }).addTo(me);
-  L.circleMarker(e.latlng, { radius: 7, color: '#fff', weight: 2, fillColor: '#2563eb', fillOpacity: 1, interactive: false }).addTo(me);
+  L.marker(e.latlng, { pane: 'mePane', icon: meIcon, interactive: false, keyboard: false }).addTo(me);
 });
 map.on('locationerror', async (e) => {
   if ((watching || compass) && e.code === 3) return;   // 追跡中のタイムアウトは次の測位を待つだけ
