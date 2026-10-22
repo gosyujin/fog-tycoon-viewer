@@ -42,3 +42,7 @@ fog-tycoon の外出先用ビューア(静的ページ)。GitHub Pages に置く
 - 履歴・ピンの層 (`recall` / `pins`) は、回る層 (leaflet-rotate の `rotatePane`) の中に作る。`mapPane` の直下に作ると、回らない層 (ポップアップ・ラベル) の上に重なってしまう。
 - 霧の描画コード (`Fog`) は本体 `fog-tycoon` の `app.js` と同じ(本体は地図が回らないが、回転対応のコードも同じものを入れてある)。直すときは両方に反映する。
 - `points.json` は行動履歴。Pages の URL は公開されるが、データは Dropbox 認可がないと読めない。
+- **CSP (meta) と SRI で、外部の script/css と通信先を固定している。** `note.gosyujin.com` は他の個人アプリと同一オリジンで `localStorage` を共有するため、外部スクリプトの改ざんや XSS から、同居アプリのトークン (PAT・Dropbox など) を読ませないための対策。
+  - unpkg の Leaflet / leaflet-rotate は `integrity` (sha384) 付き。バージョンを上げるときは `index.html` の URL・`integrity`・CSP の `script-src`/`style-src`・`sw.js` の `CDN_FILES` の 4 か所を揃える (ハッシュは `curl -sL <url> | openssl dgst -sha384 -binary | openssl base64 -A`)。
+  - 新しい外部サイト (別の地図タイル・API・フォントなど) を使うときは、CSP の `img-src` / `connect-src` などにも追加する。忘れると本番でだけブロックされる (コンソールに `Refused to ...`)。
+  - `connect-src` の `https://*.ts.net` は、同期先 URL (tailscale serve) を実行時に入力する仕様のため。
