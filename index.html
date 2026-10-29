@@ -61,6 +61,11 @@
   <input id="ciNote" placeholder="メモ (任意)" enterkeyhint="done">
   <button type="submit" id="ciSave">チェックイン</button>
 </form>
+<div id="mvBar" hidden>
+  <strong id="mvTitle"></strong>
+  <div id="mvInfo"></div>
+  <div class="btns"><button type="button" id="mvSave" disabled>この位置にする</button><button type="button" id="mvCancel">取消</button></div>
+</div>
 <button id="mode" class="fab" type="button" aria-pressed="false" aria-label="霧 (押すとヒートマップ)" hidden>🌫</button>
 <button id="pinBtn" class="fab" type="button" aria-pressed="true" aria-label="チェックインのピンを出す/隠す" hidden>📍</button>
 <div id="recall" hidden>

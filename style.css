@@ -7,7 +7,7 @@ body { font: 14px/1.4 system-ui, sans-serif; }
   display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
 }
 /* ダブルタップでページが拡大されるのを防ぐ。拡大縮小は地図(Leaflet)だけ */
-#ui, #ui *, #locate, #ciBtn, #mode, #sync, #recallBtn, #pinBtn, #recall, #recall *, #ciSheet, #ciSheet *, #login, #login *, .leaflet-control, .leaflet-control * { touch-action: manipulation; }
+#ui, #ui *, #locate, #ciBtn, #mode, #sync, #recallBtn, #pinBtn, #recall, #recall *, #ciSheet, #ciSheet *, #mvBar, #mvBar *, #login, #login *, .leaflet-control, .leaflet-control * { touch-action: manipulation; }
 .fab, #panel button { -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none; }
 #locate {
   position: absolute; z-index: 1000; left: calc(50% - 70px);   /* 画面中央のチェックイン (✅) の左 (右の ● と左右対称) */
@@ -147,6 +147,17 @@ body { font: 14px/1.4 system-ui, sans-serif; }
   padding: 8px 10px; border-radius: 8px; background: rgba(20, 24, 33, .94); color: #eee; font-size: 13px;
 }
 #ciSheet[hidden] { display: none; }
+/* 場所の位置を直すとき: 画面下にバーを出し、地図のタップで位置を決める */
+#mvBar {
+  position: absolute; z-index: 1002; left: 10px; right: 10px; max-width: 420px; bottom: calc(10px + env(safe-area-inset-bottom));
+  display: grid; gap: 6px; padding: 8px 10px; border-radius: 8px; background: rgba(20, 24, 33, .94); color: #eee; font-size: 13px;
+}
+#mvBar[hidden] { display: none; }
+#mvInfo { font-size: 12px; opacity: .85; }
+#mvBar .btns { display: flex; gap: 8px; }
+#mvBar button { font: inherit; padding: 8px 12px; border-radius: 6px; border: 1px solid #556; background: none; color: inherit; cursor: pointer; }
+#mvSave { flex: 1; border: 0 !important; background: #2563eb !important; color: #fff; }
+#mvSave:disabled { opacity: .4; cursor: default; }
 #ciSheet button, #ciSheet input { font: inherit; }
 #ciSheet input { box-sizing: border-box; width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #445; background: #161a24; color: #eee; font-size: 16px; }   /* 16px: iOS が入力でページを拡大しない */
 #ciPos { font-size: 12px; opacity: .85; min-height: 1.4em; }

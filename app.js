@@ -640,6 +640,7 @@ const dayText = (ts) => new Date(ts * 1000).toLocaleDateString('ja-JP', { year: 
 
 const ICONS = {
   pen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+  pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>',
   del: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>',
 };
 // ボタンの click は地図まで伝えない: 押した拍子にポップアップの中身を差し替えるので、ボタンが外れたあとの click を Leaflet が「地図のクリック」と見て、ポップアップを閉じてしまう
@@ -683,7 +684,7 @@ function pinPopup(p, list, editing) {
       inp.onkeydown = (e) => { if (e.key === 'Enter') save(); };
       head.replaceChildren(editForm('pin-form name', [inp], save, again));
       inp.focus();
-    }));
+    }), iconBtn('pin', '場所の位置を直す', () => mvStart(p.id)));
   }
   for (const k of list.slice(0, 12)) {
     const li = document.createElement('li'), when = document.createElement('span'), memo = document.createElement('span');
@@ -743,7 +744,7 @@ function drawPins() {
     list.sort((a, b) => b.t - a.t);
     const m = L.circleMarker([p.lat, p.lon], { pane: 'pins', renderer: pinRenderer, radius: PIN_R, color: '#fff', weight: 2, fillColor: '#7c3aed', fillOpacity: 1, bubblingMouseEvents: false });
     m.bindTooltip(p.name, { permanent: true, direction: 'right', offset: [8, 0], className: 'pin-label' });
-    m.on('click', () => openPin(p.id, false));
+    m.on('click', () => { if (!mvPid) openPin(p.id, false); });   // 位置を直している間は開かない (地図のタップを新しい位置として使う)
     m.addTo(pinLayer);
     pinMarks.push({ m, n: list.length, name: p.name });
   }
@@ -811,7 +812,7 @@ function recallCheckins(c, r) {
 
 // ---- チェックイン (記録): Dropbox の /checkins.json に書く (viewer だけ) ----
 // 操作 (ops) をいったん端末のキューに積み、通信できるとき Dropbox の最新を読み直して適用し、rev つきで書き戻す。
-// 圏外でも押せる。他の端末が先に書いていたら (競合) 読み直してやり直す。ops: { op: 'add', checkin, place|null } / { op: 'del', id } / { op: 'edit', id, t, note } / { op: 'rename', id, name }
+// 圏外でも押せる。他の端末が先に書いていたら (競合) 読み直してやり直す。ops: { op: 'add', checkin, place } / { op: 'del', id } / { op: 'edit', id, t, note } / { op: 'rename', id, name } / { op: 'move', id: 場所の id, lat, lon }
 const CI_PATH = '/checkins.json', CI_QUEUE = 'fog_ci_queue', CI_CACHE = 'fog_ci_cache', CI_NEAR_M = 100, CI_SAME_M = 300;
 let ciBase = { places: [], checkins: [] }, ciQueue = [], ciBusy = false;   // ciBase: Dropbox にある最後に読めた内容
 try { ciQueue = JSON.parse(LS.get(CI_QUEUE) || '[]') || []; } catch {}
@@ -832,9 +833,14 @@ function ciApply(d, ops) {
     } else if (o.op === 'rename') {
       const i = places.findIndex((p) => p.id === o.id);
       if (i >= 0) places[i] = { ...places[i], name: o.name };
+    } else if (o.op === 'move') {
+      const i = places.findIndex((p) => p.id === o.id);
+      if (i >= 0) places[i] = { ...places[i], lat: o.lat, lon: o.lon };
     }
   }
-  return { places, checkins };
+  // チェックインが1件も無い場所は捨てる。残すと、削除した (ズレた) 位置の場所が、同じ名前で近くにチェックインしたときに再利用され、ピンがズレた位置に戻ってしまう
+  const used = new Set(checkins.map((c) => c.place));
+  return { places: places.filter((p) => used.has(p.id)), checkins };
 }
 const ciRefresh = () => setCheckins(ciApply(ciBase, ciQueue));
 
@@ -910,6 +916,39 @@ ciRemove = (id) => {   // 削除したら true (ポップアップを描き直�
   return true;
 };
 ciEdit = (op) => { ciQueue.push(op); ciSaveQueue(); ciRefresh(); ciFlush(true); };
+
+// ---- 場所の位置を直す: 編集中の見出しのピンのアイコンから。地図をタップした所を新しい代表座標にする (その場所のチェックイン全部のピンが動く) ----
+// 位置が不安定なときに登録した場所は、座標がズレたまま残る。名前や時刻と同じく、あとから直せるようにする
+let mvPid = null, mvPos = null;
+const mvMark = L.layerGroup().addTo(map);
+function mvSet(latlng) {
+  const p = placeOf(mvPid);
+  if (!p) { mvEnd(); return; }
+  mvPos = latlng; mvMark.clearLayers();
+  L.polyline([[p.lat, p.lon], latlng], { pane: 'recall', renderer: recallRenderer, color: '#facc15', weight: 2, dashArray: '4 6', interactive: false }).addTo(mvMark);
+  L.circleMarker(latlng, { pane: 'recall', renderer: recallRenderer, radius: 8, color: '#fff', weight: 2, fillColor: '#facc15', fillOpacity: 1, interactive: false }).addTo(mvMark);
+  $('mvInfo').textContent = `もとの位置から ${Math.round(map.distance([p.lat, p.lon], latlng))}m`;
+  $('mvSave').disabled = false;
+}
+function mvStart(pid) {
+  const p = placeOf(pid);
+  if (!p) return;
+  ciClose(); map.closePopup();
+  mvPid = pid; mvPos = null; mvMark.clearLayers();
+  $('mvTitle').textContent = `「${p.name}」の位置を直す`;
+  $('mvInfo').textContent = '地図をタップして、正しい位置を指定してください';
+  $('mvSave').disabled = true; $('mvBar').hidden = false;
+}
+function mvEnd() { mvPid = null; mvPos = null; mvMark.clearLayers(); $('mvBar').hidden = true; }
+map.on('click', (e) => { if (mvPid) mvSet(e.latlng); });
+$('mvCancel').onclick = () => { const pid = mvPid; mvEnd(); openPin(pid, true); };
+$('mvSave').onclick = () => {
+  if (!mvPid || !mvPos) return;
+  const pid = mvPid, pos = mvPos;
+  mvEnd();
+  ciEdit({ op: 'move', id: pid, lat: +pos.lat.toFixed(5), lon: +pos.lng.toFixed(5) });
+  openPin(pid, true);
+};
 
 // ---- チェックインのシート: 位置 (現在地 / 地図をタップ) と名前・時刻・メモ ----
 let ciPos = null, ciPicking = false;
@@ -1062,7 +1101,7 @@ function ciSnapTime(ll) {
 }
 
 function ciOpen() {
-  setRecall(false);
+  setRecall(false); mvEnd();
   $('ciSheet').hidden = false;
   $('ciWhere').value = ''; $('ciNote').value = ''; $('ciTime').value = localInput(Date.now() / 1000);
   $('ciNear').replaceChildren(); ciMark.clearLayers(); ciPos = null;
@@ -1096,7 +1135,7 @@ $('ciSheet').onsubmit = (e) => {
   const checkin = { id: 'c' + Date.now().toString(36) + rand(3), t, place: same ? same.p.id : place.id, lat: +ciPos.lat.toFixed(5), lon: +ciPos.lng.toFixed(5) };
   const note = $('ciNote').value.trim();
   if (note) checkin.note = note;
-  ciQueue.push({ op: 'add', checkin, place }); ciSaveQueue(); ciRefresh();
+  ciQueue.push({ op: 'add', checkin, place: place || same.p }); ciSaveQueue(); ciRefresh();   // 付ける先の場所も持たせる (他の端末がその場所を消していても、書くときに作り直せる)
   ciClose();
   toast(`${name} にチェックインしました`);
   ciFlush(true);
