@@ -1190,7 +1190,7 @@ $('logout').onclick = () => {
 
 // ---------- 路線 (電車・地下鉄・バス) ----------
 // 路線図は line-on-map (同じサイトの /line-on-map/) が公開している OSM の路線データを使う。対象は東京・千葉だけ (データの対象エリアは line-on-map の scripts/fetch-routes.mjs の AREAS)。
-// ⚙ のチェックでオンオフし (既定オフ・状態は SETTING_IDS で fog_settings に保存)、オンにしたとき初めてその種別のデータを読む。
+// 画面左上の「電車」「地下鉄」「バス」でオンオフし (既定オフ・状態は SETTING_IDS で fog_settings に保存)、オンにしたとき初めてその種別のデータを読む。
 // 路線をタップすると、その路線を橙で強調し、全駅 (バスは全停留所) に丸印と名前の吹き出しを出す。路線名は画面下のカードに出す。
 // 同じ道を何本もの路線が通るので、タップした所に重なる路線はカードの選択欄で切り替える。何もない所をタップする・× で選択を外す。
 // ヒートマップ (霧の上に重なる青〜赤のぼかし) と見分けがつくよう、線は白い縁取りをつけてくっきり描く。
@@ -1672,6 +1672,7 @@ if ('serviceWorker' in navigator) addEventListener('load', () => navigator.servi
   if ($('tracks').checked) tracksLayer.addTo(map);
   for (const c of LINE_CATS) if ($(c.id).checked) setLines(c, true);
   $('ui').hidden = false;
+  $('lineBar').hidden = false;
   $('locate').hidden = false;
   $('live').hidden = false;
   $('mode').hidden = false;

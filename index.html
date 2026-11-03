@@ -13,6 +13,12 @@
 <body>
 <div id="map"></div>
 
+<div id="lineBar" role="group" aria-label="路線図の表示" hidden>
+  <label class="ln-pill" style="--c:#00a040"><input type="checkbox" id="lnTrain"><i></i>電車</label>
+  <label class="ln-pill" style="--c:#0072bc"><input type="checkbox" id="lnSubway"><i></i>地下鉄</label>
+  <label class="ln-pill" style="--c:#d9531e"><input type="checkbox" id="lnBus"><i></i>バス</label>
+</div>
+
 <div id="ui" hidden>
   <button id="gear" class="fab" type="button" aria-label="設定" aria-expanded="false" aria-controls="panel">⚙</button>
   <button id="recallBtn" class="fab" type="button" aria-pressed="false" aria-label="この辺りの履歴 (押してから地図をタップ)" hidden>🕘</button>
@@ -21,11 +27,6 @@
     <div id="stats">読み込み中…</div>
     <label><input type="checkbox" id="fog" checked> 霧</label>
     <label><input type="checkbox" id="tracks"> 軌跡</label>
-    <div class="ln-row" role="group" aria-label="路線図">
-      <label><input type="checkbox" id="lnTrain"> 電車</label>
-      <label><input type="checkbox" id="lnSubway"> 地下鉄</label>
-      <label><input type="checkbox" id="lnBus"> バス</label>
-    </div>
     <label>霧の濃さ <input type="range" id="density" min="30" max="100" step="5" value="88"> <span id="dv">88</span>%</label>
     <label>晴れ半径 <input type="range" id="radius" min="20" max="300" value="80"> <span id="rv">80</span>m</label>
     <label>地図 <select id="basemap"></select></label>
