@@ -73,6 +73,11 @@
 </div>
 <button id="mode" class="fab" type="button" aria-pressed="false" aria-label="霧 (押すとヒートマップ)" hidden>🌫</button>
 <button id="pinBtn" class="fab" type="button" aria-pressed="true" aria-label="チェックインのピンを出す/隠す" hidden>📍</button>
+<div id="lineCard" hidden>
+  <div class="lc-row"><span id="lcCat"></span><strong id="lcName"></strong><button id="lcClose" type="button" aria-label="閉じる">×</button></div>
+  <div id="lcSub"></div>
+  <select id="lcPick" hidden aria-label="重なっている路線"></select>
+</div>
 <div id="recall" hidden>
   <div class="rc-head"><strong id="rcTitle"></strong><button id="rcClose" type="button" aria-label="閉じる">×</button></div>
   <div id="rcRadii" role="group" aria-label="半径">

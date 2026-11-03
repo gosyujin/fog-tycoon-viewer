@@ -1191,16 +1191,22 @@ $('logout').onclick = () => {
 // ---------- 路線 (電車・地下鉄・バス) ----------
 // 路線図は line-on-map (同じサイトの /line-on-map/) が公開している OSM の路線データを使う。対象は東京・千葉だけ (データの対象エリアは line-on-map の scripts/fetch-routes.mjs の AREAS)。
 // ⚙ のチェックでオンオフし (既定オフ・状態は SETTING_IDS で fog_settings に保存)、オンにしたとき初めてその種別のデータを読む。
-// 路線をタップすると、その路線の駅 (バスは停留所) の名前をすべてポップアップに出す。同じ道を何本もの路線が通るので、タップした所に重なる路線は選んで切り替える。
-const LINES_BASE = new URL('../line-on-map/data/', location.href).href;   // 本番は https://note.gosyujin.com/line-on-map/data/ (sw.js が端末に保存する)
+// 路線をタップすると、その路線を橙で強調し、全駅 (バスは全停留所) に丸印と名前の吹き出しを出す。路線名は画面下のカードに出す。
+// 同じ道を何本もの路線が通るので、タップした所に重なる路線はカードの選択欄で切り替える。何もない所をタップする・× で選択を外す。
+// ヒートマップ (霧の上に重なる青〜赤のぼかし) と見分けがつくよう、線は白い縁取りをつけてくっきり描く。
+const LINES_BASE = new URL('../line-on-map/data/', location.href).href;   // 本番は https://gosyujin.com/line-on-map/data/ (sw.js が端末に保存する)
 const LINE_TAP_PX = 14;   // 指で押しやすいよう、線から離れていてもこの距離 (画面上の px) 以内なら当たりとする
 // 重なったときは下から バス → 電車 → 地下鉄 の順に描く (回る層 rotatePane の中。霧 (400) より上、履歴 (450)・ピン (460) より下)
 const LINE_CATS = [
-  { key: 'bus', id: 'lnBus', weight: 2, z: 420 },
-  { key: 'train', id: 'lnTrain', weight: 3, z: 421 },
-  { key: 'subway', id: 'lnSubway', weight: 3, z: 422 },
+  { key: 'bus', id: 'lnBus', label: 'バス', weight: 2, z: 420 },
+  { key: 'train', id: 'lnTrain', label: '電車', weight: 3, z: 421 },
+  { key: 'subway', id: 'lnSubway', label: '地下鉄', weight: 3, z: 422 },
 ];
 for (const c of LINE_CATS) { map.createPane('lines-' + c.key, map.getPane('rotatePane')).style.zIndex = c.z; c.renderer = L.canvas({ pane: 'lines-' + c.key }); }
+map.createPane('lines-sel', map.getPane('rotatePane')).style.zIndex = 423;   // 選んだ路線 (強調・駅の丸印)。全種別の線より上
+const selRenderer = L.canvas({ pane: 'lines-sel' });
+const LINE_HIGHLIGHT = '#ff8a00';
+const LINE_CASING = 3;   // 白い縁取りの太さ (線の太さに足す)
 
 async function getLineJSON(path) {
   const r = await fetch(LINES_BASE + path);
@@ -1216,7 +1222,7 @@ function lineMeta() {
   }
   return lineMetaP;
 }
-// 種別ごとの路線と駅。feats: [{ gid, colour, segs: [[[lon, lat], ...], ...], bbox }]、stops: gid → [駅名] (路線の中で名前の重複は1つに、データの並び順のまま)
+// 種別ごとの路線と駅。feats: [{ gid, colour, segs: [[[lon, lat], ...], ...], bbox }]、stops: gid → [{ name, lon, lat }] (路線の中で名前の重複は1つに、データの並び順のまま)
 function loadLineData(c) {
   if (!c.data) {
     c.data = (async () => {
@@ -1235,7 +1241,7 @@ function loadLineData(c) {
           if (!name) continue;
           if (!stops.has(gid)) stops.set(gid, []);
           const list = stops.get(gid);
-          if (!list.includes(name)) list.push(name);
+          if (!list.some((x) => x.name === name)) list.push({ name, lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] });
         }
       }
       return (c.loaded = { feats, stops, meta });
@@ -1246,19 +1252,22 @@ function loadLineData(c) {
 }
 
 async function setLines(c, on) {
-  if (!on) { if (c.layer) map.removeLayer(c.layer); return; }
+  if (!on) { if (c.layer) map.removeLayer(c.layer); if (lineSel && lineSel.hits[lineSel.i].c === c) clearLineSel(); return; }
   try {
     const d = await loadLineData(c);
     if (!$(c.id).checked) return;   // 読み込み中にオフにされた
     if (!c.layer) {
-      c.layer = L.layerGroup(d.feats.map((f) => L.polyline(
+      const base = { pane: 'lines-' + c.key, renderer: c.renderer, interactive: false };
+      // 白い縁取りは全路線を1本の線にまとめて先に描く (色が同じなので。路線ごとに描くより軽い)。その上に路線の色の線
+      const casing = L.polyline(d.feats.flatMap((f) => f.segs.map((seg) => seg.map(([lon, lat]) => [lat, lon]))), { ...base, color: '#fff', weight: c.weight + LINE_CASING, opacity: 0.9 });
+      c.layer = L.layerGroup([casing, ...d.feats.map((f) => L.polyline(
         f.segs.map((seg) => seg.map(([lon, lat]) => [lat, lon])),
-        { pane: 'lines-' + c.key, renderer: c.renderer, color: f.colour || '#555', weight: c.weight, opacity: 0.85, interactive: false },
-      )));
+        { ...base, color: f.colour || '#555', weight: c.weight, opacity: 1 },
+      ))]);
     }
     c.layer.addTo(map);
   } catch (e) {
-    toast(`${$(c.id).parentNode.textContent.trim()}の路線図を読み込めませんでした。チェックを入れ直すと取り直します`, 5000);   // チェックは外さない (保存した設定を、通信できないだけで消さない)
+    toast(`${c.label}の路線図を読み込めませんでした。チェックを入れ直すと取り直します`, 5000);   // チェックは外さない (保存した設定を、通信できないだけで消さない)
   }
 }
 for (const c of LINE_CATS) $(c.id).onchange = (e) => { saveSettings(); setLines(c, e.target.checked); };
@@ -1298,37 +1307,79 @@ function linesAt(ll) {
   return hits.sort((a, b) => a.d - b.d);
 }
 
-function lineBox(hits, onResize) {
-  const box = document.createElement('div'), pick = document.createElement('select'), head = document.createElement('div'), list = document.createElement('ul');
-  box.className = 'ln-pop'; head.className = 'ln-head'; pick.className = 'ln-pick';
-  const info = (h) => h.c.loaded.meta.lines.get(h.c.key + ':' + h.gid) || { name: '路線 ' + h.gid };
-  hits.forEach((h, i) => { const o = document.createElement('option'); o.value = i; o.textContent = info(h).name; pick.append(o); });
-  const render = (i) => {
-    const h = hits[i], m = info(h), names = h.c.loaded.stops.get(h.gid) || [];
-    head.replaceChildren();
-    const sw = document.createElement('i'), t = document.createElement('strong');
-    sw.style.background = (h.c.loaded.feats.find((f) => f.gid === h.gid) || {}).colour || '#555';
-    t.textContent = m.name;
-    head.append(sw, t);
-    if (m.operator && !m.name.includes(m.operator)) { const o = document.createElement('small'); o.textContent = m.operator; head.append(o); }
-    list.replaceChildren(...(names.length ? names.map((n) => { const li = document.createElement('li'); li.textContent = n; return li; })
-      : [Object.assign(document.createElement('li'), { textContent: '駅・停留所の情報がありません', className: 'none' })]));
-    list.title = names.length ? names.length + (h.c.key === 'bus' ? ' か所の停留所' : ' 駅') : '';
-  };
-  pick.onchange = () => { render(+pick.value); onResize(); };
-  render(0);
-  if (hits.length > 1) box.append(pick);
-  box.append(head, list);
-  return box;
+// ---- 選んだ路線: 橙の強調・全駅の丸印と吹き出し・画面下のカード ----
+const selLayer = L.layerGroup().addTo(map);
+let lineSel = null;   // { hits: [{ c, gid, d }], i: 選んでいる番号 }
+let lineMarks = [];   // 駅の丸印 (吹き出しつき)。路線の順
+const lineInfo = (h) => h.c.loaded.meta.lines.get(h.c.key + ':' + h.gid) || { name: '路線 ' + h.gid };
+const lineColour = (h) => (h.c.loaded.feats.find((f) => f.gid === h.gid) || {}).colour || '#555';
+const MAX_BUBBLE_CHARS = 6;
+const shortName = (n) => (n.length > MAX_BUBBLE_CHARS ? n.slice(0, MAX_BUBBLE_CHARS - 1) + '…' : n);
+
+function drawLineSel(h) {
+  selLayer.clearLayers(); lineMarks = [];
+  const d = h.c.loaded, colour = lineColour(h), w = h.c.weight;
+  const segs = d.feats.filter((f) => f.gid === h.gid).flatMap((f) => f.segs.map((seg) => seg.map(([lon, lat]) => [lat, lon])));
+  const base = { pane: 'lines-sel', renderer: selRenderer, interactive: false };
+  L.polyline(segs, { ...base, color: LINE_HIGHLIGHT, weight: w + 20, opacity: 0.4 }).addTo(selLayer);   // グロー (外側を薄く、内側を濃く)
+  L.polyline(segs, { ...base, color: LINE_HIGHLIGHT, weight: w + 11, opacity: 0.65 }).addTo(selLayer);
+  L.polyline(segs, { ...base, color: '#fff', weight: w + 4, opacity: 1 }).addTo(selLayer);
+  L.polyline(segs, { ...base, color: colour, weight: w + 1.5, opacity: 1 }).addTo(selLayer);
+  for (const s of d.stops.get(h.gid) || []) {
+    const m = L.circleMarker([s.lat, s.lon], { ...base, radius: 5, color: '#222', weight: 2, fillColor: '#fff', fillOpacity: 1 });
+    m.bindTooltip(shortName(s.name), { permanent: true, direction: 'top', offset: [0, -10], className: 'ln-bubble' });
+    m.addTo(selLayer);
+    const el = m.getTooltip().getElement();
+    if (el) el.style.setProperty('--c', colour);
+    lineMarks.push(m);
+  }
+  layoutLineBubbles();
 }
-function showLinePopup(ll, hits) {
-  const pop = L.popup({ maxWidth: 260, maxHeight: 300 });
-  pop.setLatLng(ll).setContent(lineBox(hits, () => pop.update())).openOn(map);
+
+// 吹き出しの置き場所: 路線の順に、丸印の上 → 下 の順で、他の吹き出し・丸印に重ならない所を探し、置けなければ隠す (寄ると出る)。
+// 画面上の位置で決めるので、ズーム・地図の回転のたびにやり直す。表示範囲には依らないので、動かしてもちらつかない
+let bubbleRaf = 0;
+function layoutLineBubbles() {
+  const items = lineMarks.filter((m) => m.getTooltip() && m.getTooltip().getElement());
+  const pts = items.map((m) => map.latLngToContainerPoint(m.getLatLng()));
+  const dots = pts.map((q) => ({ x: q.x - 7, y: q.y - 7, w: 14, h: 14 })), placed = [];
+  items.forEach((m, i) => {
+    const tip = m.getTooltip(), el = tip.getElement(), w = el.offsetWidth + 2, h = el.offsetHeight + 2, q = pts[i];
+    const free = (r) => !placed.some((o) => rectHit(r, o)) && !dots.some((o, j) => j !== i && rectHit(r, o));
+    let pick = null;
+    for (const [dir, oy] of [['top', -10], ['bottom', 10]]) {
+      const r = { x: q.x - w / 2, y: dir === 'top' ? q.y - h - 10 : q.y + 10, w, h };
+      if (free(r)) { pick = { dir, oy, r }; break; }
+    }
+    const use = pick || { dir: 'top', oy: -10 };
+    tip.options.direction = use.dir; tip.options.offset = L.point(0, use.oy); tip.update();
+    el.classList.toggle('ln-off', !pick);
+    if (pick) placed.push(pick.r);
+  });
 }
+map.on('zoomend rotate', () => { if (lineMarks.length && !bubbleRaf) bubbleRaf = requestAnimationFrame(() => { bubbleRaf = 0; layoutLineBubbles(); }); });
+
+function showLineCard() {
+  const { hits, i } = lineSel, h = hits[i], m = lineInfo(h), n = (h.c.loaded.stops.get(h.gid) || []).length;
+  const card = $('lineCard'), pick = $('lcPick');
+  card.style.setProperty('--c', lineColour(h));
+  $('lcCat').textContent = h.c.label;
+  $('lcName').textContent = m.name;
+  $('lcSub').textContent = [m.operator && !m.name.includes(m.operator) ? m.operator : '', n ? n + (h.c.key === 'bus' ? ' か所の停留所' : ' 駅') : '駅・停留所の情報がありません'].filter(Boolean).join(' / ');
+  pick.hidden = hits.length < 2;
+  if (!pick.hidden && pick.options.length !== hits.length) pick.replaceChildren(...hits.map((x, k) => Object.assign(document.createElement('option'), { value: k, textContent: x.c.label + ' ' + lineInfo(x).name })));
+  pick.value = i;
+  card.hidden = false;
+}
+function selectLine(hits, i) { lineSel = { hits, i }; drawLineSel(hits[i]); showLineCard(); }
+function clearLineSel() { lineSel = null; selLayer.clearLayers(); lineMarks = []; $('lineCard').hidden = true; }
+$('lcPick').onchange = (e) => selectLine(lineSel.hits, +e.target.value);
+$('lcClose').onclick = clearLineSel;
 map.on('click', (e) => {
   if (recallOn || ciPicking) return;   // 履歴・チェックインの位置指定のタップは、そちらを優先する
   const hits = linesAt(e.latlng);
-  if (hits.length) showLinePopup(e.latlng, hits);
+  if (hits.length) selectLine(hits, 0);
+  else if (lineSel) clearLineSel();   // 何もない所をタップしたら選択を外す
 });
 
 // 現在地 (Geolocation は HTTPS が必要。GitHub Pages なら可)

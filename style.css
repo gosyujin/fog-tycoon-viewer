@@ -186,13 +186,28 @@ body { font: 14px/1.4 system-ui, sans-serif; }
 #ciSheet.typing > * { grid-column: 1 / -1; }
 #ciSheet.typing > #ciWhere, #ciSheet.typing > #ciNote { grid-column: auto; }
 
-/* 路線図 (電車・地下鉄・バス): ⚙ のチェックと、路線をタップしたときの駅名ポップアップ */
+/* 路線図 (電車・地下鉄・バス): ⚙ のチェック、選んだ路線の駅の吹き出し、画面下のカード */
 .ln-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
-.ln-pop { font-size: 12px; min-width: 140px; }
-.ln-pop .ln-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; margin-bottom: 4px; }
-.ln-pop .ln-head i { width: 14px; height: 4px; border-radius: 2px; flex: none; }
-.ln-pop .ln-head strong { font-size: 13px; overflow-wrap: anywhere; }
-.ln-pop .ln-head small { flex-basis: 100%; opacity: .7; }
-.ln-pop .ln-pick { width: 100%; max-width: 100%; margin-bottom: 6px; font: inherit; }
-.ln-pop ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
-.ln-pop li.none { opacity: .6; }
+.leaflet-tooltip.ln-bubble {
+  margin: 0; padding: 2px 6px; font-size: 12px; font-weight: 600; line-height: 1.3; color: #222;
+  background: rgba(255, 255, 255, .96); border: 1.5px solid var(--c, #666); border-radius: 6px; box-shadow: 0 1px 3px rgba(0, 0, 0, .25);
+}
+.leaflet-tooltip.ln-bubble::before { display: none; }   /* Leaflet 標準のしっぽ。下の ::after で丸印を指すしっぽを自前で描く */
+.ln-bubble::after {
+  content: ''; position: absolute; left: 50%; margin-left: -4px; bottom: -5px; width: 8px; height: 8px;
+  background: inherit; border: inherit; border-top: 0; border-left: 0; transform: rotate(45deg);
+}
+.ln-bubble.leaflet-tooltip-bottom::after { bottom: auto; top: -5px; transform: rotate(225deg); }
+.ln-bubble.ln-off { visibility: hidden; }   /* 置き場所が無い吹き出し (寄ると出る) */
+#lineCard {
+  position: absolute; z-index: 1001; left: 10px; right: 10px; max-width: 420px;
+  bottom: calc(134px + env(safe-area-inset-bottom)); padding: 8px 10px 8px 12px; border-radius: 8px;
+  background: rgba(20, 24, 33, .92); color: #eee; border-left: 4px solid var(--c, #888); font-size: 13px;
+}
+#lineCard[hidden] { display: none; }
+#lineCard .lc-row { display: flex; align-items: center; gap: 8px; }
+#lcCat { flex: none; padding: 1px 8px; border-radius: 10px; background: rgba(255, 255, 255, .18); font-size: 11px; }
+#lcName { flex: 1; font-size: 15px; overflow-wrap: anywhere; }
+#lcClose { border: 0; background: none; color: inherit; font-size: 20px; line-height: 1; padding: 2px 6px; cursor: pointer; }
+#lcSub { margin-top: 2px; font-size: 12px; opacity: .75; }
+#lcPick { margin-top: 6px; width: 100%; max-width: 100%; font: inherit; }
