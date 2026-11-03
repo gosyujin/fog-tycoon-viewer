@@ -21,6 +21,11 @@
     <div id="stats">読み込み中…</div>
     <label><input type="checkbox" id="fog" checked> 霧</label>
     <label><input type="checkbox" id="tracks"> 軌跡</label>
+    <div class="ln-row" role="group" aria-label="路線図">
+      <label><input type="checkbox" id="lnTrain"> 電車</label>
+      <label><input type="checkbox" id="lnSubway"> 地下鉄</label>
+      <label><input type="checkbox" id="lnBus"> バス</label>
+    </div>
     <label>霧の濃さ <input type="range" id="density" min="30" max="100" step="5" value="88"> <span id="dv">88</span>%</label>
     <label>晴れ半径 <input type="range" id="radius" min="20" max="300" value="80"> <span id="rv">80</span>m</label>
     <label>地図 <select id="basemap"></select></label>

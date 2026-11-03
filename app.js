@@ -478,7 +478,7 @@ const ONE_FINGER_DIR = 1, ONE_FINGER_PX_PER_ZOOM = 90, DOUBLE_TAP_MS = 300, DOUB
 })();
 
 // ---------- 設定の保存・復元 (この端末の localStorage) ----------
-const SETTING_IDS = ['fog', 'tracks', 'radius', 'density', 'range', 'basemap'];
+const SETTING_IDS = ['fog', 'tracks', 'lnTrain', 'lnSubway', 'lnBus', 'radius', 'density', 'range', 'basemap'];
 function saveSettings() {
   const v = {};
   for (const id of SETTING_IDS) v[id] = $(id).type === 'checkbox' ? $(id).checked : $(id).value;
@@ -1188,6 +1188,149 @@ $('logout').onclick = () => {
   Promise.resolve().then(() => caches.delete(DATA_CACHE)).catch(() => {}).finally(() => location.reload());   // 端末に置いた行動履歴の控えも消す
 };
 
+// ---------- 路線 (電車・地下鉄・バス) ----------
+// 路線図は line-on-map (同じサイトの /line-on-map/) が公開している OSM の路線データを使う。対象は東京・千葉だけ (データの対象エリアは line-on-map の scripts/fetch-routes.mjs の AREAS)。
+// ⚙ のチェックでオンオフし (既定オフ・状態は SETTING_IDS で fog_settings に保存)、オンにしたとき初めてその種別のデータを読む。
+// 路線をタップすると、その路線の駅 (バスは停留所) の名前をすべてポップアップに出す。同じ道を何本もの路線が通るので、タップした所に重なる路線は選んで切り替える。
+const LINES_BASE = new URL('../line-on-map/data/', location.href).href;   // 本番は https://note.gosyujin.com/line-on-map/data/ (sw.js が端末に保存する)
+const LINE_TAP_PX = 14;   // 指で押しやすいよう、線から離れていてもこの距離 (画面上の px) 以内なら当たりとする
+// 重なったときは下から バス → 電車 → 地下鉄 の順に描く (回る層 rotatePane の中。霧 (400) より上、履歴 (450)・ピン (460) より下)
+const LINE_CATS = [
+  { key: 'bus', id: 'lnBus', weight: 2, z: 420 },
+  { key: 'train', id: 'lnTrain', weight: 3, z: 421 },
+  { key: 'subway', id: 'lnSubway', weight: 3, z: 422 },
+];
+for (const c of LINE_CATS) { map.createPane('lines-' + c.key, map.getPane('rotatePane')).style.zIndex = c.z; c.renderer = L.canvas({ pane: 'lines-' + c.key }); }
+
+async function getLineJSON(path) {
+  const r = await fetch(LINES_BASE + path);
+  if (!r.ok) throw new Error(path + ' ' + r.status);
+  return r.json();
+}
+let lineMetaP = null;   // index.json: エリア一覧と、路線 (種別:gid) の名前・事業者
+function lineMeta() {
+  if (!lineMetaP) {
+    lineMetaP = getLineJSON('index.json')
+      .then((d) => ({ areas: d.areas.map((a) => a.id), lines: new Map(d.lines.map((l) => [l.cat + ':' + l.gid, l])) }))
+      .catch((e) => { lineMetaP = null; throw e; });
+  }
+  return lineMetaP;
+}
+// 種別ごとの路線と駅。feats: [{ gid, colour, segs: [[[lon, lat], ...], ...], bbox }]、stops: gid → [駅名] (路線の中で名前の重複は1つに、データの並び順のまま)
+function loadLineData(c) {
+  if (!c.data) {
+    c.data = (async () => {
+      const meta = await lineMeta();
+      const parts = await Promise.all(meta.areas.map((a) => Promise.all([getLineJSON(`${a}/${c.key}.geojson`), getLineJSON(`${a}/${c.key}-stops.geojson`)])));
+      const feats = [], stops = new Map();
+      for (const [lines, stopFc] of parts) {
+        for (const f of lines.features) {
+          const segs = f.geometry.coordinates;
+          let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+          for (const seg of segs) for (const [lon, lat] of seg) { if (lon < w) w = lon; if (lon > e) e = lon; if (lat < s) s = lat; if (lat > n) n = lat; }
+          feats.push({ gid: f.properties.gid, colour: f.properties.colour, segs, bbox: [w, s, e, n] });
+        }
+        for (const f of stopFc.features) {
+          const { gid, name } = f.properties;
+          if (!name) continue;
+          if (!stops.has(gid)) stops.set(gid, []);
+          const list = stops.get(gid);
+          if (!list.includes(name)) list.push(name);
+        }
+      }
+      return (c.loaded = { feats, stops, meta });
+    })();
+    c.data.catch(() => { c.data = null; });   // 失敗したら、チェックを入れ直したときに取り直す
+  }
+  return c.data;
+}
+
+async function setLines(c, on) {
+  if (!on) { if (c.layer) map.removeLayer(c.layer); return; }
+  try {
+    const d = await loadLineData(c);
+    if (!$(c.id).checked) return;   // 読み込み中にオフにされた
+    if (!c.layer) {
+      c.layer = L.layerGroup(d.feats.map((f) => L.polyline(
+        f.segs.map((seg) => seg.map(([lon, lat]) => [lat, lon])),
+        { pane: 'lines-' + c.key, renderer: c.renderer, color: f.colour || '#555', weight: c.weight, opacity: 0.85, interactive: false },
+      )));
+    }
+    c.layer.addTo(map);
+  } catch (e) {
+    toast(`${$(c.id).parentNode.textContent.trim()}の路線図を読み込めませんでした。チェックを入れ直すと取り直します`, 5000);   // チェックは外さない (保存した設定を、通信できないだけで消さない)
+  }
+}
+for (const c of LINE_CATS) $(c.id).onchange = (e) => { saveSettings(); setLines(c, e.target.checked); };
+
+// 点 (0,0) から線分 a-b までの距離の2乗 (m)
+function segDist2(ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+  const t = l2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / l2)) : 0;
+  const x = ax + t * dx, y = ay + t * dy;
+  return x * x + y * y;
+}
+// タップした所に近い路線 (表示中の種別だけ)。近い順
+function linesAt(ll) {
+  const rad = ll.lat * Math.PI / 180, kx = 111320 * Math.cos(rad), ky = 110574;
+  const tol = LINE_TAP_PX * 40075016.686 * Math.cos(rad) / (256 * 2 ** map.getZoom()), tol2 = tol * tol;   // px → m (地図が回っていても距離は同じ)
+  const dLon = tol / kx, dLat = tol / ky, hits = [];
+  for (const c of LINE_CATS) {
+    if (!c.layer || !map.hasLayer(c.layer)) continue;
+    const best = new Map();   // gid → 距離の2乗 (同じ路線が東京・千葉の両方に入っていることがある)
+    for (const f of c.loaded.feats) {
+      const [w, s, e, n] = f.bbox;
+      if (ll.lng < w - dLon || ll.lng > e + dLon || ll.lat < s - dLat || ll.lat > n + dLat) continue;
+      let d = best.has(f.gid) ? best.get(f.gid) : Infinity;
+      for (const seg of f.segs) {
+        let px = (seg[0][0] - ll.lng) * kx, py = (seg[0][1] - ll.lat) * ky;
+        for (let i = 1; i < seg.length; i++) {
+          const qx = (seg[i][0] - ll.lng) * kx, qy = (seg[i][1] - ll.lat) * ky;
+          const d2 = segDist2(px, py, qx, qy);
+          if (d2 < d) d = d2;
+          px = qx; py = qy;
+        }
+      }
+      if (d <= tol2) best.set(f.gid, d);
+    }
+    for (const [gid, d] of best) hits.push({ c, gid, d });
+  }
+  return hits.sort((a, b) => a.d - b.d);
+}
+
+function lineBox(hits, onResize) {
+  const box = document.createElement('div'), pick = document.createElement('select'), head = document.createElement('div'), list = document.createElement('ul');
+  box.className = 'ln-pop'; head.className = 'ln-head'; pick.className = 'ln-pick';
+  const info = (h) => h.c.loaded.meta.lines.get(h.c.key + ':' + h.gid) || { name: '路線 ' + h.gid };
+  hits.forEach((h, i) => { const o = document.createElement('option'); o.value = i; o.textContent = info(h).name; pick.append(o); });
+  const render = (i) => {
+    const h = hits[i], m = info(h), names = h.c.loaded.stops.get(h.gid) || [];
+    head.replaceChildren();
+    const sw = document.createElement('i'), t = document.createElement('strong');
+    sw.style.background = (h.c.loaded.feats.find((f) => f.gid === h.gid) || {}).colour || '#555';
+    t.textContent = m.name;
+    head.append(sw, t);
+    if (m.operator && !m.name.includes(m.operator)) { const o = document.createElement('small'); o.textContent = m.operator; head.append(o); }
+    list.replaceChildren(...(names.length ? names.map((n) => { const li = document.createElement('li'); li.textContent = n; return li; })
+      : [Object.assign(document.createElement('li'), { textContent: '駅・停留所の情報がありません', className: 'none' })]));
+    list.title = names.length ? names.length + (h.c.key === 'bus' ? ' か所の停留所' : ' 駅') : '';
+  };
+  pick.onchange = () => { render(+pick.value); onResize(); };
+  render(0);
+  if (hits.length > 1) box.append(pick);
+  box.append(head, list);
+  return box;
+}
+function showLinePopup(ll, hits) {
+  const pop = L.popup({ maxWidth: 260, maxHeight: 300 });
+  pop.setLatLng(ll).setContent(lineBox(hits, () => pop.update())).openOn(map);
+}
+map.on('click', (e) => {
+  if (recallOn || ciPicking) return;   // 履歴・チェックインの位置指定のタップは、そちらを優先する
+  const hits = linesAt(e.latlng);
+  if (hits.length) showLinePopup(e.latlng, hits);
+});
+
 // 現在地 (Geolocation は HTTPS が必要。GitHub Pages なら可)
 // 現在地の点は、ピン (460) だけでなくチェックインの名前 (tooltipPane=650) より上に置く。名前は回らない層にあるので、回る層の中の canvas では上に出せない
 map.createPane('mePane', map.getPane('norotatePane') || map.getPane('mapPane')).style.zIndex = 655;
@@ -1476,6 +1619,7 @@ if ('serviceWorker' in navigator) addEventListener('load', () => navigator.servi
   }
   restoreSettings();
   if ($('tracks').checked) tracksLayer.addTo(map);
+  for (const c of LINE_CATS) if ($(c.id).checked) setLines(c, true);
   $('ui').hidden = false;
   $('locate').hidden = false;
   $('live').hidden = false;

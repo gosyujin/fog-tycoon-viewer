@@ -185,3 +185,14 @@ body { font: 14px/1.4 system-ui, sans-serif; }
 #ciSheet.typing { grid-template-columns: 1fr 1fr; }
 #ciSheet.typing > * { grid-column: 1 / -1; }
 #ciSheet.typing > #ciWhere, #ciSheet.typing > #ciNote { grid-column: auto; }
+
+/* 路線図 (電車・地下鉄・バス): ⚙ のチェックと、路線をタップしたときの駅名ポップアップ */
+.ln-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.ln-pop { font-size: 12px; min-width: 140px; }
+.ln-pop .ln-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; margin-bottom: 4px; }
+.ln-pop .ln-head i { width: 14px; height: 4px; border-radius: 2px; flex: none; }
+.ln-pop .ln-head strong { font-size: 13px; overflow-wrap: anywhere; }
+.ln-pop .ln-head small { flex-basis: 100%; opacity: .7; }
+.ln-pop .ln-pick { width: 100%; max-width: 100%; margin-bottom: 6px; font: inherit; }
+.ln-pop ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
+.ln-pop li.none { opacity: .6; }

@@ -9,6 +9,8 @@
 //    - CDN と ?v=<sha> 付きの URL は中身が変わらないので、保存済みならそのまま返す
 //    - ?v なしの URL (index.html など) は、保存済みならすぐ返して、裏で取り直す (次の起動で新しくなる。最新への切り替えは app.js の更新確認が ?v=<sha> へ移動して行う)
 //    - 保存がなければ通信を先に試し、SHELL_WAIT_MS 待っても返らない・失敗したら、?v 違いでも保存したものを返す
+// 3. 路線図のデータ (同じサイトの /line-on-map/data/。app.js の LINES_BASE): 数MBあり、めったに変わらないので、保存済みで LINES_FRESH_MS 以内ならそのまま返す。
+//    古ければ取り直すが、LINES_WAIT_MS 待っても返らない・失敗したら古いものを返す (保存がなければ LINES_GIVEUP_MS で諦める)。アプリ本体 (2.) の4秒待ちでは足りないので別に扱う
 // Dropbox への通信 (api / content.dropboxapi.com) と同期先には触らない (app.js の dbx() が時間で打ち切る)。
 const CACHE = 'fog-tiles-v1';
 const SHELL = 'fog-shell-v1';
@@ -18,6 +20,9 @@ const TILE_HOSTS = ['tile.openstreetmap.org', 'cyberjapandata.gsi.go.jp', 'serve
 const isTileHost = (h) => TILE_HOSTS.includes(h);
 const TILE_WAIT_MS = 3000, TILE_GIVEUP_MS = 10000, TILE_BAD_MS = 30000;
 const SHELL_WAIT_MS = 4000;
+const LINES = 'fog-lines-v1';
+const LINES_PATH = '/line-on-map/data/';
+const LINES_FRESH_MS = 7 * 24 * 3600 * 1000, LINES_WAIT_MS = 3000, LINES_GIVEUP_MS = 30000;
 const SHELL_FILES = ['./', 'index.html', 'style.css', 'app.js', 'build-info.js', 'base-map.json', 'icons/favicon-48.png', 'icons/apple-touch-icon.png'];
 const CDN_FILES = [   // バージョン固定なので、保存したものをそのまま使う (index.html の URL と揃える)
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
@@ -99,6 +104,23 @@ async function shell(e) {
   }
 }
 
+async function lines(req) {
+  const cache = await caches.open(LINES), hit = await cache.match(req);
+  if (hit && Date.now() - Number(hit.headers.get('x-cached-at') || 0) < LINES_FRESH_MS) return hit;
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), hit ? LINES_WAIT_MS : LINES_GIVEUP_MS);
+  try {
+    const res = await fetch(req, { signal: ctl.signal });
+    if (!res.ok) return hit || res;
+    const headers = new Headers(res.headers);
+    headers.set('x-cached-at', String(Date.now()));
+    await cache.put(req, new Response(await res.clone().blob(), { status: 200, headers }));
+    return res;
+  } catch (err) {
+    if (hit) return hit;   // オフライン・電波が弱い: 古くても返す
+    throw err;
+  } finally { clearTimeout(timer); }
+}
+
 async function cdn(req) {
   const cache = await caches.open(SHELL);
   const hit = await cache.match(req.url);
@@ -114,5 +136,6 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(req.url);
   if (isTileHost(url.hostname)) e.respondWith(tile(req));
   else if (CDN_FILES.includes(req.url)) e.respondWith(cdn(req));
+  else if (url.origin === location.origin && url.pathname.includes(LINES_PATH)) e.respondWith(lines(req));
   else if (url.origin === location.origin && !url.searchParams.has('nc')) e.respondWith(shell(e));   // nc: 更新確認 (build-info.js?nc=…) は毎回新しく取る
 });
