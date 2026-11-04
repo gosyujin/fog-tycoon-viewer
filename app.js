@@ -1198,16 +1198,27 @@ const LINES_BASE = new URL('../line-on-map/data/', location.href).href;   // 本
 const LINE_TAP_PX = 14;   // 指で押しやすいよう、線から離れていてもこの距離 (画面上の px) 以内なら当たりとする
 // 重なったときは下から バス → 電車 → 地下鉄 の順に描く (回る層 rotatePane の中。霧 (400) より上、履歴 (450)・ピン (460) より下)
 const LINE_CATS = [
-  { key: 'bus', id: 'lnBus', label: 'バス', weight: 2, z: 420 },
-  { key: 'train', id: 'lnTrain', label: '電車', weight: 3, z: 421 },
-  { key: 'subway', id: 'lnSubway', label: '地下鉄', weight: 3, z: 422 },
+  { key: 'bus', id: 'lnBus', label: 'バス', weight: 1.5, dash: '6 4', z: 420 },   // dash: 破線の (線, 間) の長さ (px)
+  { key: 'train', id: 'lnTrain', label: '電車', weight: 2, dash: '8 5', z: 421 },
+  { key: 'subway', id: 'lnSubway', label: '地下鉄', weight: 2, dash: '8 5', z: 422 },
 ];
 for (const c of LINE_CATS) { map.createPane('lines-' + c.key, map.getPane('rotatePane')).style.zIndex = c.z; c.renderer = L.canvas({ pane: 'lines-' + c.key }); }
 map.createPane('lines-sel', map.getPane('rotatePane')).style.zIndex = 423;   // 選んだ路線 (強調・駅の丸印)。全種別の線より上
 const selRenderer = L.canvas({ pane: 'lines-sel' });
 const LINE_HIGHLIGHT = '#ff8a00';
-const LINE_CASING = 3;   // 白い縁取りの太さ (線の太さに足す)
+const LINE_CASING = 2;   // 白い縁取りの太さ (線の太さに足す)。縁取りは途切れない白、その上に路線の色の破線
 
+// 端点が一致する線分をつなげて長い線にする (データは数十〜数百mごとに切れていて、そのままだと破線が切れ目ごとに始まり直す)。当たり判定も軽くなる
+function chainSegs(segs) {
+  const out = [];
+  let cur = null;
+  for (const s of segs) {
+    const last = cur && cur[cur.length - 1];
+    if (last && last[0] === s[0][0] && last[1] === s[0][1]) { for (let i = 1; i < s.length; i++) cur.push(s[i]); }
+    else { cur = s.slice(); out.push(cur); }
+  }
+  return out;
+}
 async function getLineJSON(path) {
   const r = await fetch(LINES_BASE + path);
   if (!r.ok) throw new Error(path + ' ' + r.status);
@@ -1231,7 +1242,7 @@ function loadLineData(c) {
       const feats = [], stops = new Map();
       for (const [lines, stopFc] of parts) {
         for (const f of lines.features) {
-          const segs = f.geometry.coordinates;
+          const segs = chainSegs(f.geometry.coordinates);
           let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
           for (const seg of segs) for (const [lon, lat] of seg) { if (lon < w) w = lon; if (lon > e) e = lon; if (lat < s) s = lat; if (lat > n) n = lat; }
           feats.push({ gid: f.properties.gid, colour: f.properties.colour, segs, bbox: [w, s, e, n] });
@@ -1262,7 +1273,7 @@ async function setLines(c, on) {
       const casing = L.polyline(d.feats.flatMap((f) => f.segs.map((seg) => seg.map(([lon, lat]) => [lat, lon]))), { ...base, color: '#fff', weight: c.weight + LINE_CASING, opacity: 0.9 });
       c.layer = L.layerGroup([casing, ...d.feats.map((f) => L.polyline(
         f.segs.map((seg) => seg.map(([lon, lat]) => [lat, lon])),
-        { ...base, color: f.colour || '#555', weight: c.weight, opacity: 1 },
+        { ...base, color: f.colour || '#555', weight: c.weight, opacity: 1, dashArray: c.dash, lineCap: 'butt' },
       ))]);
     }
     c.layer.addTo(map);
