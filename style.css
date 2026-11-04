@@ -42,7 +42,7 @@ body { font: 14px/1.4 system-ui, sans-serif; }
 /* 同期の結果など。⚙ を閉じていても見えるように、下のボタンの上に出す */
 #toast {
   position: absolute; z-index: 1100; left: 50%; transform: translateX(-50%);
-  bottom: calc(134px + env(safe-area-inset-bottom)); max-width: calc(100vw - 32px);
+  bottom: calc(134px + var(--lc-h, 0px) + env(safe-area-inset-bottom)); max-width: calc(100vw - 32px);
   padding: 8px 14px; border-radius: 8px; background: rgba(20, 24, 33, .92); color: #eee; font-size: 13px; text-align: center;
   pointer-events: none;
 }
@@ -54,7 +54,7 @@ body { font: 14px/1.4 system-ui, sans-serif; }
 }
 #mode.on { background: #ea580c; color: #fff; }
 #legend {
-  position: absolute; z-index: 1000; right: 10px; bottom: calc(82px + env(safe-area-inset-bottom)); display: grid; gap: 2px;
+  position: absolute; z-index: 1000; right: 10px; bottom: calc(82px + var(--lc-h, 0px) + env(safe-area-inset-bottom)); display: grid; gap: 2px;
   padding: 6px 8px; border-radius: 6px; background: rgba(20, 24, 33, .85); color: #eee; font-size: 12px; pointer-events: none;
 }
 #legend span { display: flex; align-items: center; gap: 6px; }
@@ -88,7 +88,7 @@ body { font: 14px/1.4 system-ui, sans-serif; }
 #recallBtn.on { background: #ea580c; color: #fff; }
 #recall {
   position: absolute; z-index: 1001; left: 10px; right: 10px; max-width: 420px;
-  bottom: calc(134px + env(safe-area-inset-bottom)); max-height: 38vh; overflow-y: auto; overscroll-behavior: contain;
+  bottom: calc(134px + var(--lc-h, 0px) + env(safe-area-inset-bottom)); max-height: 38vh; overflow-y: auto; overscroll-behavior: contain;
   padding: 8px 10px; border-radius: 8px; background: rgba(20, 24, 33, .92); color: #eee; font-size: 13px;
 }
 #recall[hidden] { display: none; }
@@ -215,7 +215,7 @@ body { font: 14px/1.4 system-ui, sans-serif; }
 .ln-bubble.ln-off { visibility: hidden; }   /* 置き場所が無い吹き出し (寄ると出る) */
 #lineCard {
   position: absolute; z-index: 1001; left: 10px; right: 10px; max-width: 420px;
-  bottom: calc(134px + env(safe-area-inset-bottom)); padding: 8px 10px 8px 12px; border-radius: 8px;
+  bottom: calc(82px + env(safe-area-inset-bottom)); padding: 8px 10px 8px 12px; border-radius: 8px;   /* 下のボタン (上端 74px) のすぐ上 */
   background: rgba(20, 24, 33, .92); color: #eee; border-left: 4px solid var(--c, #888); font-size: 13px;
 }
 #lineCard[hidden] { display: none; }
