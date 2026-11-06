@@ -663,6 +663,23 @@ function editForm(cls, inputs, onSave, onCancel) {
   return f;
 }
 
+// 現在地からこの場所までの経路を Google Maps で開くリンク (徒歩 / 電車)。出発地 (origin) は付けない: 省くと Google Maps が端末の今の現在地を使う。
+// viewer の lastPos は測位が走ったときにしか更新されず、古い・無いことがあるので渡さない。行き先は各チェックインの座標ではなく、
+// 「場所の位置を直す」で直せる場所の座標 (p.lat / p.lon) を使う (ピンの表示と同じ)。iPhone / Android では Google Maps アプリが入っていればアプリで開く
+const ROUTE_MODES = [['walking', '徒歩'], ['transit', '電車']];
+function routeLinks(p) {
+  const row = document.createElement('div'), label = document.createElement('span');
+  row.className = 'route'; label.textContent = 'ここへの経路'; row.append(label);
+  for (const [mode, text] of ROUTE_MODES) {
+    const a = document.createElement('a');
+    a.href = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${p.lat},${p.lon}`)}&travelmode=${mode}`;
+    a.target = '_blank'; a.rel = 'noopener'; a.textContent = text;
+    a.onclick = (e) => e.stopPropagation();   // 地図のクリックと見られてポップアップが閉じないよう、他のボタンと同じく伝えない
+    row.append(a);
+  }
+  return row;
+}
+
 // ポップアップ。通常は「日付 メモ」、「編集」を押すと各行に鉛筆 (日時・メモを直す) とゴミ箱が出て、見出しの鉛筆で場所名を直せる。
 // 日付の列とメモの列を分けるので、メモが長いときは日付の下にもぐらず、メモの列の中で折り返す
 function pinPopup(p, list, editing) {
@@ -717,7 +734,9 @@ function pinPopup(p, list, editing) {
     ul.append(li);
   }
   if (list.length > 12) { const li = document.createElement('li'); li.className = 'more'; li.textContent = `ほか ${list.length - 12} 回`; ul.append(li); }
-  box.append(head, ul);
+  box.append(head);
+  if (!editing) box.append(routeLinks(p));
+  box.append(ul);
   if (ciRemove) box.append(textBtn(editing ? '完了' : '編集', 'edit', () => openPin(p.id, !editing)));   // 編集・削除できる viewer だけ。うっかり押さないよう、既定では鉛筆もゴミ箱も出さない
   return box;
 }

@@ -123,6 +123,8 @@ body { font: 14px/1.4 system-ui, sans-serif; }
 .pin-pop li { display: grid; grid-template-columns: auto 1fr; align-items: start; column-gap: 8px; }   /* 日付の列 | メモの列 (メモは列の中で折り返す) */
 .pin-pop ul.editing li { grid-template-columns: auto 1fr auto; }   /* 編集中は右に 鉛筆 | ゴミ箱 */
 .pin-pop li.more, .pin-pop li.ed { display: block; }
+.pin-pop .route { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 12px; color: #667; }
+.pin-pop .route a { padding: 3px 12px; border-radius: 6px; border: 1px solid #2563eb; color: #2563eb; text-decoration: none; }   /* 指で押しやすいよう余白を取る */
 .pin-pop .when { white-space: nowrap; }
 .pin-pop .memo { overflow-wrap: anywhere; }
 .pin-pop .acts { display: flex; margin: -3px 0; }
