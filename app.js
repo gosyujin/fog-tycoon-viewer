@@ -1657,7 +1657,10 @@ function initialView() {
   SS.set('fog_started', '1');
   if (v && isFinite(v.lat) && isFinite(v.lng) && isFinite(v.zoom)) { map.setView([v.lat, v.lng], v.zoom); fitted = true; return; }
   if (!navigator.geolocation) return;
-  startInitialLocate();   // 失敗したらデータ全体表示のまま
+  // 許可が「granted」のときだけ自動で現在地へ寄る。iOS のホーム画面アプリは許可を覚えず起動のたびに「prompt」になり、
+  // 起動直後に許可ダイアログが出てしまうので、その場合は自動取得せず、◎ を押したときに聞く (データ全体表示のまま)
+  if (!navigator.permissions) return;
+  navigator.permissions.query({ name: 'geolocation' }).then((p) => { if (p.state === 'granted' && !initialLocating) startInitialLocate(); }).catch(() => {});   // 失敗したらデータ全体表示のまま
 }
 
 // ---------- ビルド表示・更新確認 (gyazo-tycoon-viewer と同じ方式) ----------
