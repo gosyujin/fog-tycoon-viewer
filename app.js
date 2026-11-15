@@ -1208,7 +1208,7 @@ $('logout').onclick = () => {
 };
 
 // ---------- 路線 (電車・地下鉄・バス) ----------
-// 路線図は line-on-map (同じサイトの /line-on-map/) が公開している OSM の路線データを使う。対象は東京・千葉・北海道 (北海道は電車・地下鉄だけ。データの対象エリアは line-on-map の scripts/fetch-routes.mjs の AREAS)。
+// 路線図は line-on-map (同じサイトの /line-on-map/) が公開している OSM の路線データを使う。対象は全国 (エリアごとに持つ種別が違い、index.json の areas[].cats にあるエリアだけ取りに行く。エリアは line-on-map の scripts/fetch-routes.mjs の AREAS)。
 // 画面左上の「電車」「地下鉄」「バス」でオンオフし (既定オフ・状態は SETTING_IDS で fog_settings に保存)、オンにしたとき初めてその種別のデータを読む。
 // 路線をタップすると、その路線を橙で強調し、全駅 (バスは全停留所) に丸印と名前の吹き出しを出す。路線名は画面下のカードに出す。
 // 同じ道を何本もの路線が通るので、タップした所に重なる路線はカードの選択欄で切り替える。何もない所をタップする・× で選択を外す。
@@ -1247,7 +1247,7 @@ let lineMetaP = null;   // index.json: エリア一覧と、路線 (種別:gid) 
 function lineMeta() {
   if (!lineMetaP) {
     lineMetaP = getLineJSON('index.json')
-      .then((d) => ({ areas: d.areas.map((a) => a.id), lines: new Map(d.lines.map((l) => [l.cat + ':' + l.gid, l])) }))
+      .then((d) => ({ areas: d.areas, lines: new Map(d.lines.map((l) => [l.cat + ':' + l.gid, l])) }))
       .catch((e) => { lineMetaP = null; throw e; });
   }
   return lineMetaP;
@@ -1257,7 +1257,7 @@ function loadLineData(c) {
   if (!c.data) {
     c.data = (async () => {
       const meta = await lineMeta();
-      const parts = await Promise.all(meta.areas.map((a) => Promise.all([getLineJSON(`${a}/${c.key}.geojson`), getLineJSON(`${a}/${c.key}-stops.geojson`)])));
+      const parts = await Promise.all(meta.areas.filter((a) => a.cats.includes(c.key)).map((a) => Promise.all([getLineJSON(`${a.id}/${c.key}.geojson`), getLineJSON(`${a.id}/${c.key}-stops.geojson`)])));
       const feats = [], stops = new Map();
       for (const [lines, stopFc] of parts) {
         for (const f of lines.features) {
